@@ -43,7 +43,7 @@ impl Default for Server {
             bind: "127.0.0.1".into(),
             port_start: 43100,
             port_end: 43999,
-            request_timeout_seconds: 300,
+            request_timeout_seconds: 1800,
         }
     }
 }
@@ -104,6 +104,7 @@ mod tests {
         assert!(p.exists());
         let b = load(&p).unwrap();
         assert_eq!(b.server.port_start, 43100);
+        assert_eq!(b.server.request_timeout_seconds, 1800);
     }
 
     #[test]

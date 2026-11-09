@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AppWindow, BarChart3, Box, Check, Copy, KeyRound, Plus, Power, RefreshCw, Server, Settings as SettingsIcon, ShieldCheck, Trash2, X } from "lucide-react";
+import { Activity, AppWindow, BarChart3, Box, Check, Copy, KeyRound, Plus, Power, RefreshCw, Search, Server, Settings as SettingsIcon, ShieldCheck, Trash2, X } from "lucide-react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api";
 import type { Application, DashboardStats, Provider, ProviderKind, Settings } from "./types";
@@ -39,6 +39,14 @@ const Header = ({ title, subtitle, action }: { title: string; subtitle: string; 
 const Empty = ({ icon: Icon, title, text }: { icon: typeof Server; title: string; text: string }) => <div className="empty"><Icon/><h3>{title}</h3><p>{text}</p></div>;
 const ErrorBox = ({ message }: { message: string }) => message ? <div className="error">{message}</div> : null;
 const number = (value: number) => new Intl.NumberFormat().format(value);
+const formatDate = (value: string) => value.slice(0, 10);
+const formatDuration = (milliseconds: number) => {
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)}ms`;
+  const seconds = Math.round(milliseconds / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60), remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+};
 
 function Dashboard() {
   const [stats, setStats] = useState<DashboardStats>();
@@ -49,10 +57,12 @@ function Dashboard() {
     ["Success rate", `${(stats?.successRate ?? 0).toFixed(1)}%`, Check],
     ["Input tokens", number(stats?.tokensIn ?? 0), BarChart3],
     ["Output tokens", number(stats?.tokensOut ?? 0), BarChart3],
-    ["Avg. duration", `${Math.round(stats?.averageDurationMs ?? 0)} ms`, Server],
-    ["P95 duration", `${Math.round(stats?.p95DurationMs ?? 0)} ms`, Activity],
+    ["Avg. duration", formatDuration(stats?.averageDurationMs ?? 0), Server],
+    ["P95 duration", formatDuration(stats?.p95DurationMs ?? 0), Activity],
   ] as const;
-  return <><Header title="Overview" subtitle="Your AI gateway at a glance"/><ErrorBox message={error}/><section className="metrics">{cards.map(([label,value,Icon]) => <article className="metric" key={label}><div><span>{label}</span><strong>{value}</strong></div><Icon/></article>)}</section>{stats?.daily.length ? <section className="panel trend"><div className="panel-title"><div><h2>30-day traffic</h2><p>Requests per day</p></div></div><div className="bars">{stats.daily.map(day => <div key={day.day} title={`${day.day}: ${day.requests}`}><span style={{height: `${Math.max(8, day.requests / Math.max(...stats.daily.map(item => item.requests)) * 100)}%`}}/><small>{day.day.slice(5)}</small></div>)}</div></section> : null}<section className="panel"><div className="panel-title"><div><h2>Recent requests</h2><p>Latest traffic across all applications</p></div></div>{stats?.recent.length ? <RequestTable rows={stats.recent}/> : <Empty icon={Activity} title="No requests yet" text="Requests made through an application will appear here."/>}</section></>;
+  const peak = Math.max(1, ...stats?.daily.map(item => item.requests) ?? []);
+  const providerTokens = stats?.providerTokens ?? [];
+  return <><Header title="Overview" subtitle="Your AI gateway at a glance"/><ErrorBox message={error}/><section className="metrics">{cards.map(([label,value,Icon]) => <article className="metric" key={label}><div><span>{label}</span><strong>{value}</strong></div><Icon/></article>)}</section>{providerTokens.length ? <section className="panel provider-usage"><div className="panel-title"><div><h2>Token usage by provider</h2><p>Input and output tokens across retained request history</p></div></div><div className="table-wrap"><table><thead><tr><th>Provider</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th></tr></thead><tbody>{providerTokens.map(item => <tr key={item.provider}><td><b>{item.provider}</b></td><td>{number(item.tokensIn)}</td><td>{number(item.tokensOut)}</td><td><b>{number(item.tokensIn + item.tokensOut)}</b></td></tr>)}</tbody></table></div></section> : null}{stats?.daily.length ? <section className="panel trend"><div className="panel-title"><div><h2>30-day traffic</h2><p>Requests per day</p></div></div><div className="bars">{stats.daily.map(day => <div key={day.day} title={`${day.day}: ${day.requests}`}><span style={{height: day.requests ? `${Math.max(8, day.requests / peak * 100)}%` : 0}}/><small>{day.day.slice(5)}</small></div>)}</div></section> : null}<section className="panel"><div className="panel-title"><div><h2>Recent requests</h2><p>Latest traffic across all applications</p></div></div>{stats?.recent.length ? <RequestTable rows={stats.recent}/> : <Empty icon={Activity} title="No requests yet" text="Requests made through an application will appear here."/>}</section></>;
 }
 
 function Applications() {
@@ -90,8 +100,11 @@ function ProviderDialog({ provider, onClose, onSave }: { provider: Partial<Provi
 
 function Logs() {
   const [stats, setStats] = useState<DashboardStats>();
+  const [filter, setFilter] = useState("");
   useEffect(() => { void api.stats().then(setStats); }, []);
-  return <><Header title="Request logs" subtitle="Metadata for requests passing through agenthub"/><section className="panel">{stats?.recent.length ? <RequestTable rows={stats.recent}/> : <Empty icon={Activity} title="No request metadata" text="Status, latency, token usage, and model information will appear here."/>}</section></>;
+  const query = filter.trim().toLocaleLowerCase();
+  const rows = stats?.recent.filter(row => !query || [formatDate(row.createdAt), row.application, row.provider, row.model, row.endpoint, row.modality, row.status, row.tokensIn, row.tokensOut, row.accumulatedTokensIn, row.accumulatedTokensOut, row.errorType ?? ""].some(value => String(value).toLocaleLowerCase().includes(query))) ?? [];
+  return <><Header title="Request logs" subtitle="Metadata for requests passing through agenthub"/><section className="panel"><div className="log-tools"><Search aria-hidden="true"/><label><span className="sr-only">Filter requests</span><input type="search" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter requests…"/></label></div>{rows.length ? <RequestTable rows={rows} showAccumulated/> : stats?.recent.length ? <Empty icon={Search} title="No matching requests" text="Try a different filter."/> : <Empty icon={Activity} title="No request metadata" text="Status, latency, token usage, and model information will appear here."/>}</section></>;
 }
 
 function SettingsPage() {
@@ -100,7 +113,7 @@ function SettingsPage() {
   return <><Header title="Settings" subtitle="Agenthub is configured with a local TOML file"/><section className="settings-card"><h2>Configuration file</h2><p>Edit this file and restart agenthub to change advanced settings.</p><code>{settings?.configPath ?? "Loading…"}</code><h3>Conversation logging</h3><div className="notice"><ShieldCheck/><div><b>{settings?.logConversations ? "Enabled" : "Disabled by default"}</b><p>When enabled, prompts and responses may contain sensitive information and are written as local JSONL files. Set <code>log_conversations = true</code> under <code>[privacy]</code> only if you understand this risk.</p>{settings?.logConversations && <p>Location: <code>{settings.conversationLogPath}</code> · retention: {settings.conversationRetentionDays || "unlimited"} days</p>}</div></div><h3>Metadata retention</h3><p>{settings?.requestMetadataDays ? `${settings.requestMetadataDays} days` : "Unlimited"}</p></section></>;
 }
 
-function RequestTable({ rows }: { rows: NonNullable<DashboardStats>["recent"] }) { return <div className="table-wrap"><table><thead><tr><th>Date</th><th>Application</th><th>Provider / model</th><th>Endpoint</th><th>Status</th><th>Tokens</th><th>Duration</th></tr></thead><tbody>{rows.map(r => <tr key={r.id}><td>{new Date(r.createdAt).toLocaleString()}</td><td>{r.application}</td><td><b>{r.provider}</b><small>{r.model}</small></td><td><b>{r.modality || "unknown"}</b><small>{r.endpoint || "—"}</small></td><td><span className={r.status < 400 ? "status good" : "status warn"} title={r.errorType ?? undefined}>{r.status}</span></td><td>{number(r.tokensIn + r.tokensOut)}</td><td>{r.durationMs} ms</td></tr>)}</tbody></table></div>; }
+function RequestTable({ rows, showAccumulated = false }: { rows: NonNullable<DashboardStats>["recent"]; showAccumulated?: boolean }) { return <div className="table-wrap"><table><thead><tr><th>Date</th><th>Application</th><th>Provider / model</th><th>Endpoint</th><th>Status</th><th>Tokens (in/out)</th>{showAccumulated && <th>Accumulated (in/out)</th>}<th>Duration</th></tr></thead><tbody>{rows.map(r => <tr key={r.id}><td>{formatDate(r.createdAt)}</td><td>{r.application}</td><td><b>{r.provider}</b><small>{r.model}</small></td><td><b>{r.modality || "unknown"}</b><small>{r.endpoint || "—"}</small></td><td><span className={r.status < 400 ? "status good" : "status warn"} title={r.errorType ?? undefined}>{r.status}</span></td><td>{number(r.tokensIn)} / {number(r.tokensOut)}</td>{showAccumulated && <td>{number(r.accumulatedTokensIn)} / {number(r.accumulatedTokensOut)}</td>}<td>{formatDuration(r.durationMs)}</td></tr>)}</tbody></table></div>; }
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) { return <div className="modal-bg" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h2>{title}</h2><button className="icon" aria-label="Close" onClick={onClose}><X/></button></div>{children}</div></div>; }
 function DialogActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" type="submit">{label}</button></div>; }
 function CopyButton({ value }: { value: string }) { const [copied, setCopied] = useState(false); return <button className="copy" aria-label="Copy" onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? <Check/> : <Copy/>}</button>; }

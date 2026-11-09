@@ -515,15 +515,35 @@ fn adapt_request(
                     "?api-version=2024-10-21"
                 }
             ),
-            body: raw.to_vec(),
+            body: passthrough_body(path, json_body, raw),
             translated: false,
         }),
         _ => Ok(AdaptedRequest {
             url: format!("{}{}", provider.base_url.trim_end_matches('/'), suffix),
-            body: raw.to_vec(),
+            body: passthrough_body(path, json_body, raw),
             translated: false,
         }),
     }
+}
+
+fn passthrough_body(path: &str, json_body: &Value, raw: &[u8]) -> Vec<u8> {
+    let path = path.split('?').next().unwrap_or(path);
+    let endpoint = path.strip_prefix("/v1").unwrap_or(path);
+    if endpoint != "/chat/completions"
+        || json_body.get("stream").and_then(Value::as_bool) != Some(true)
+    {
+        return raw.to_vec();
+    }
+
+    let Some(mut body) = json_body.as_object().cloned() else {
+        return raw.to_vec();
+    };
+    if let Some(Value::Object(options)) = body.get_mut("stream_options") {
+        options.insert("include_usage".into(), json!(true));
+    } else {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
+    serde_json::to_vec(&Value::Object(body)).unwrap_or_else(|_| raw.to_vec())
 }
 
 fn adapt_response(provider: &Provider, path: &str, status: u16, raw: &[u8]) -> Vec<u8> {
@@ -603,10 +623,12 @@ fn streaming_response(
         let mut upstream_stream = upstream.bytes_stream();
         let mut response_bytes = 0_u64;
         let mut captured = Vec::new();
+        let mut stream_usage = StreamingUsage::default();
         while let Some(item) = upstream_stream.next().await {
             let chunk = match item {
                 Ok(chunk) => chunk,
                 Err(error) => {
+                    let (tokens_in, tokens_out) = stream_usage.finish();
                     let _ = db.record(&RequestRecord {
                         application_id: &application.id,
                         provider_id: Some(&provider.id),
@@ -614,8 +636,8 @@ fn streaming_response(
                         endpoint: &endpoint,
                         modality: &modality,
                         status: StatusCode::BAD_GATEWAY.as_u16(),
-                        tokens_in: 0,
-                        tokens_out: 0,
+                        tokens_in,
+                        tokens_out,
                         duration_ms: started.elapsed().as_millis() as u64,
                         request_bytes: request_body.len() as u64,
                         response_bytes,
@@ -626,11 +648,13 @@ fn streaming_response(
                 }
             };
             response_bytes += chunk.len() as u64;
+            stream_usage.feed(&chunk);
             if capture_response {
                 captured.extend_from_slice(&chunk);
             }
             yield Ok::<Bytes, std::io::Error>(chunk);
         }
+        let (tokens_in, tokens_out) = stream_usage.finish();
         let _ = db.record(&RequestRecord {
             application_id: &application.id,
             provider_id: Some(&provider.id),
@@ -638,8 +662,8 @@ fn streaming_response(
             endpoint: &endpoint,
             modality: &modality,
             status: status.as_u16(),
-            tokens_in: 0,
-            tokens_out: 0,
+            tokens_in,
+            tokens_out,
             duration_ms: started.elapsed().as_millis() as u64,
             request_bytes: request_body.len() as u64,
             response_bytes,
@@ -732,20 +756,122 @@ fn supports(kind: &str, endpoint: &str) -> bool {
 }
 
 fn usage(body: &[u8]) -> (u64, u64) {
-    let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let usage = parsed.get("usage").cloned().unwrap_or(Value::Null);
-    (
-        usage
+    let mut counts = (None, None);
+    if let Ok(parsed) = serde_json::from_slice::<Value>(body) {
+        update_usage(&mut counts, token_counts(&parsed));
+    } else {
+        if body.starts_with(b"data:") || body.starts_with(b"event:") || body.starts_with(b":") {
+            let mut stream = StreamingUsage::default();
+            stream.feed(body);
+            let streamed = stream.finish();
+            if streamed != (0, 0) {
+                return streamed;
+            }
+        }
+        for line in body.split(|byte| *byte == b'\n') {
+            if let Ok(parsed) = serde_json::from_slice::<Value>(line) {
+                update_usage(&mut counts, token_counts(&parsed));
+            }
+        }
+    }
+    (counts.0.unwrap_or(0), counts.1.unwrap_or(0))
+}
+
+#[derive(Default)]
+struct StreamingUsage {
+    buffer: Vec<u8>,
+    tokens_in: Option<u64>,
+    tokens_out: Option<u64>,
+}
+
+impl StreamingUsage {
+    fn feed(&mut self, chunk: &[u8]) {
+        self.buffer.extend_from_slice(chunk);
+        while let Some(end) = sse_event_end(&self.buffer) {
+            let event = self.buffer.drain(..end).collect::<Vec<_>>();
+            self.update(&event);
+        }
+    }
+
+    fn finish(&mut self) -> (u64, u64) {
+        if !self.buffer.is_empty() {
+            let event = std::mem::take(&mut self.buffer);
+            self.update(&event);
+        }
+        (self.tokens_in.unwrap_or(0), self.tokens_out.unwrap_or(0))
+    }
+
+    fn update(&mut self, event: &[u8]) {
+        let mut data = Vec::new();
+        for line in event.split(|byte| *byte == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if let Some(value) = line.strip_prefix(b"data:") {
+                if !data.is_empty() {
+                    data.push(b'\n');
+                }
+                data.extend_from_slice(value.strip_prefix(b" ").unwrap_or(value));
+            }
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(&data) {
+            let mut counts = (self.tokens_in, self.tokens_out);
+            update_usage(&mut counts, token_counts(&value));
+            (self.tokens_in, self.tokens_out) = counts;
+        }
+    }
+}
+
+fn sse_event_end(buffer: &[u8]) -> Option<usize> {
+    let lf_end = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|position| position + 2);
+    let crlf_end = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4);
+    lf_end.into_iter().chain(crlf_end).min()
+}
+
+fn token_counts(value: &Value) -> Option<(Option<u64>, Option<u64>)> {
+    let usage_objects = [
+        value.get("usage"),
+        value.get("usageMetadata"),
+        value.pointer("/response/usage"),
+        value.pointer("/data/usage"),
+    ];
+    for usage in usage_objects.into_iter().flatten() {
+        let input = usage
             .get("prompt_tokens")
             .or_else(|| usage.get("input_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        usage
+            .or_else(|| usage.get("promptTokenCount"))
+            .and_then(Value::as_u64);
+        let output = usage
             .get("completion_tokens")
             .or_else(|| usage.get("output_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    )
+            .or_else(|| usage.get("candidatesTokenCount"))
+            .and_then(Value::as_u64);
+        if input.is_some() || output.is_some() {
+            return Some((input, output));
+        }
+    }
+
+    let input = value.get("prompt_eval_count").and_then(Value::as_u64);
+    let output = value.get("eval_count").and_then(Value::as_u64);
+    (input.is_some() || output.is_some()).then_some((input, output))
+}
+
+fn update_usage(
+    current: &mut (Option<u64>, Option<u64>),
+    next: Option<(Option<u64>, Option<u64>)>,
+) {
+    if let Some((tokens_in, tokens_out)) = next {
+        if tokens_in.is_some() {
+            current.0 = tokens_in;
+        }
+        if tokens_out.is_some() {
+            current.1 = tokens_out;
+        }
+    }
 }
 
 fn provider_secret(id: &str) -> Option<String> {
@@ -849,6 +975,37 @@ mod tests {
     }
 
     #[test]
+    fn requests_usage_for_streaming_chat_completions() {
+        let request = adapt_request(
+            &provider("openai"),
+            "/v1/chat/completions?trace=true",
+            "model",
+            "key",
+            &json!({
+                "model":"model",
+                "stream":true,
+                "stream_options":{"custom":true}
+            }),
+            br#"{"model":"model","stream":true,"stream_options":{"custom":true}}"#,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["stream_options"]["custom"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+
+        let non_streaming = adapt_request(
+            &provider("openai"),
+            "/v1/chat/completions",
+            "model",
+            "key",
+            &json!({"stream":false}),
+            b"{\"stream\":false}",
+        )
+        .unwrap();
+        assert_eq!(non_streaming.body, b"{\"stream\":false}");
+    }
+
+    #[test]
     fn translates_anthropic_and_google_chat() {
         let anthropic = provider("anthropic");
         let request = adapt_request(
@@ -886,6 +1043,33 @@ mod tests {
             serde_json::from_slice::<Value>(&request.body).unwrap()["contents"][0]["role"],
             "model"
         );
+    }
+
+    #[test]
+    fn reads_streaming_and_provider_specific_usage() {
+        let mut stream = StreamingUsage::default();
+        stream.feed(b"data: {\"choices\":[]}\n\n");
+        stream.feed(b"data: {\"usage\":{\"prompt_tokens\":12");
+        stream.feed(b",\"completion_tokens\":7}}\n\n");
+        stream.feed(b"data: [DONE]\n\n");
+        assert_eq!(stream.finish(), (12, 7));
+
+        let mut response_stream = StreamingUsage::default();
+        response_stream.feed(
+            b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":9}}}\r\n\r\n",
+        );
+        assert_eq!(response_stream.finish(), (4, 9));
+        assert_eq!(
+            usage(b"data: {\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3}}\n\n"),
+            (2, 3)
+        );
+
+        assert_eq!(usage(b"{\"prompt_eval_count\":3,\"eval_count\":5}"), (3, 5));
+        assert_eq!(
+            usage(b"{\"response\":{\"usage\":{\"input_tokens\":6,\"output_tokens\":8}}}"),
+            (6, 8)
+        );
+        assert_eq!(usage(b"not json"), (0, 0));
     }
 
     #[tokio::test]

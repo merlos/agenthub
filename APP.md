@@ -12,6 +12,8 @@ request where necessary, and records operational metadata.
 - Regenerate keys when client credentials need to be revoked.
 - Pin an application to a provider or follow the current default provider.
 - Bind listeners only to `127.0.0.1` or `::1`.
+- Provider requests allow up to 30 minutes by default; `server.request_timeout_seconds`
+  in `config.toml` can override this for slower or faster environments.
 
 ## Providers
 
@@ -59,8 +61,17 @@ Request metadata is stored in SQLite and includes:
 - Input and output tokens when reported by the provider
 - Total duration, request bytes, response bytes, and timestamp
 
+Streaming OpenAI-compatible chat requests ask the provider to include usage and
+record usage events from the stream. Providers that do not report usage still
+appear with zero token counts.
+
 The overview displays request count, success rate, input/output tokens,
-average latency, P95 latency, 30-day traffic, and recent requests.
+average latency, P95 latency, 30-day traffic, and recent requests. The Providers
+page displays input, output, total token usage, and average output tokens per
+second within each provider listing across the retained request history.
+Request dates use `yyyy-mm-dd`, durations use human-friendly units, and the
+request log can be filtered by its displayed metadata. Each log entry shows
+input/output tokens for that request and the accumulated input/output totals.
 Authentication failures are recorded without storing the supplied credential.
 
 ## Privacy and storage

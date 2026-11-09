@@ -42,7 +42,9 @@ Agenthub creates this file on first launch. Edit it and restart Agenthub:
 bind = "127.0.0.1"
 port_start = 43100
 port_end = 43999
-request_timeout_seconds = 300
+# Maximum time to wait for a provider response, in seconds.
+# Increase this for slow local models. Default: 1800 (30 minutes).
+request_timeout_seconds = 1800
 
 [privacy]
 log_conversations = false

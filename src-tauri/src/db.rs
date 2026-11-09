@@ -218,10 +218,33 @@ impl Database {
             )?;
         let p95_duration_ms = percentile_95(&connection, requests)?;
         let mut query = connection.prepare(
+            "SELECT COALESCE(p.name,'Unavailable'),
+                    COALESCE(SUM(r.tokens_in),0),COALESCE(SUM(r.tokens_out),0)
+             FROM requests r
+             LEFT JOIN providers p ON p.id=r.provider_id
+             GROUP BY r.provider_id,p.name
+             ORDER BY SUM(r.tokens_in + r.tokens_out) DESC,1",
+        )?;
+        let provider_tokens = query
+            .query_map([], |row| {
+                Ok(ProviderTokenStat {
+                    provider: row.get(0)?,
+                    tokens_in: row.get(1)?,
+                    tokens_out: row.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut query = connection.prepare(
             "SELECT r.id,COALESCE(a.name,'Deleted'),COALESCE(p.name,'Unavailable'),
                     r.model,r.endpoint,r.modality,r.status,r.tokens_in,r.tokens_out,
+                    r.accumulated_tokens_in,r.accumulated_tokens_out,
                     r.duration_ms,r.request_bytes,r.response_bytes,r.error_type,r.created_at
-             FROM requests r
+             FROM (
+                 SELECT *,
+                        SUM(tokens_in) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) accumulated_tokens_in,
+                        SUM(tokens_out) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) accumulated_tokens_out
+                 FROM requests
+             ) r
              LEFT JOIN applications a ON a.id=r.application_id
              LEFT JOIN providers p ON p.id=r.provider_id
              ORDER BY r.id DESC LIMIT 100",
@@ -238,11 +261,13 @@ impl Database {
                     status: row.get(6)?,
                     tokens_in: row.get(7)?,
                     tokens_out: row.get(8)?,
-                    duration_ms: row.get(9)?,
-                    request_bytes: row.get(10)?,
-                    response_bytes: row.get(11)?,
-                    error_type: row.get(12)?,
-                    created_at: row.get(13)?,
+                    accumulated_tokens_in: row.get(9)?,
+                    accumulated_tokens_out: row.get(10)?,
+                    duration_ms: row.get(11)?,
+                    request_bytes: row.get(12)?,
+                    response_bytes: row.get(13)?,
+                    error_type: row.get(14)?,
+                    created_at: row.get(15)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -250,15 +275,21 @@ impl Database {
             "SELECT substr(created_at,1,10),COUNT(*) FROM requests
              WHERE created_at >= ? GROUP BY 1 ORDER BY 1",
         )?;
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-        let daily = query
-            .query_map([cutoff], |row| {
-                Ok(DailyStat {
-                    day: row.get(0)?,
-                    requests: row.get(1)?,
-                })
-            })?
+        let today = chrono::Utc::now().date_naive();
+        let first_day = today - chrono::Duration::days(29);
+        let cutoff = format!("{first_day}T00:00:00Z");
+        let daily_counts: std::collections::HashMap<String, u64> = query
+            .query_map([cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
+        let daily = (0..30)
+            .map(|offset| {
+                let day = (first_day + chrono::Duration::days(offset)).to_string();
+                DailyStat {
+                    requests: daily_counts.get(&day).copied().unwrap_or_default(),
+                    day,
+                }
+            })
+            .collect();
         Ok(DashboardStats {
             requests,
             success_rate: if requests == 0 {
@@ -270,6 +301,7 @@ impl Database {
             tokens_out: output,
             average_duration_ms: average,
             p95_duration_ms,
+            provider_tokens,
             daily,
             recent,
         })
@@ -404,7 +436,15 @@ mod tests {
             .unwrap();
         let stats = database.stats().unwrap();
         assert_eq!(stats.tokens_out, 3);
+        assert_eq!(stats.provider_tokens.len(), 1);
+        assert_eq!(stats.provider_tokens[0].provider, "p2");
+        assert_eq!(stats.provider_tokens[0].tokens_in, 2);
+        assert_eq!(stats.provider_tokens[0].tokens_out, 3);
         assert_eq!(stats.p95_duration_ms, 5.0);
+        assert_eq!(stats.recent[0].accumulated_tokens_in, 2);
+        assert_eq!(stats.recent[0].accumulated_tokens_out, 3);
+        assert_eq!(stats.daily.len(), 30);
+        assert_eq!(stats.daily.last().unwrap().requests, 1);
         assert_eq!(database.prune_requests(0).unwrap(), 0);
         assert_eq!(database.prune_requests(1).unwrap(), 0);
 
@@ -419,6 +459,8 @@ mod tests {
         let stats = empty.stats().unwrap();
         assert_eq!(stats.requests, 0);
         assert_eq!(stats.p95_duration_ms, 0.0);
+        assert!(stats.provider_tokens.is_empty());
+        assert!(stats.daily.iter().all(|day| day.requests == 0));
         assert!(reopened.applications().unwrap().is_empty());
     }
 }

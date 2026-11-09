@@ -56,6 +56,8 @@ pub struct RequestStat {
     pub status: u16,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    pub accumulated_tokens_in: u64,
+    pub accumulated_tokens_out: u64,
     pub duration_ms: u64,
     pub request_bytes: u64,
     pub response_bytes: u64,
@@ -72,6 +74,14 @@ pub struct DailyStat {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderTokenStat {
+    pub provider: String,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashboardStats {
     pub requests: u64,
     pub success_rate: f64,
@@ -79,6 +89,7 @@ pub struct DashboardStats {
     pub tokens_out: u64,
     pub average_duration_ms: f64,
     pub p95_duration_ms: f64,
+    pub provider_tokens: Vec<ProviderTokenStat>,
     pub daily: Vec<DailyStat>,
     pub recent: Vec<RequestStat>,
 }
