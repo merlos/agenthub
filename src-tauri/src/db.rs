@@ -219,7 +219,9 @@ impl Database {
         let p95_duration_ms = percentile_95(&connection, requests)?;
         let mut query = connection.prepare(
             "SELECT COALESCE(p.name,'Unavailable'),
-                    COALESCE(SUM(r.tokens_in),0),COALESCE(SUM(r.tokens_out),0)
+                    COALESCE(SUM(r.tokens_in),0),COALESCE(SUM(r.tokens_out),0),
+                    COALESCE(AVG(CASE WHEN r.duration_ms > 0
+                                      THEN r.tokens_out * 1000.0 / r.duration_ms END),0)
              FROM requests r
              LEFT JOIN providers p ON p.id=r.provider_id
              GROUP BY r.provider_id,p.name
@@ -231,6 +233,7 @@ impl Database {
                     provider: row.get(0)?,
                     tokens_in: row.get(1)?,
                     tokens_out: row.get(2)?,
+                    average_tokens_per_second: row.get(3)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -440,6 +443,7 @@ mod tests {
         assert_eq!(stats.provider_tokens[0].provider, "p2");
         assert_eq!(stats.provider_tokens[0].tokens_in, 2);
         assert_eq!(stats.provider_tokens[0].tokens_out, 3);
+        assert_eq!(stats.provider_tokens[0].average_tokens_per_second, 600.0);
         assert_eq!(stats.p95_duration_ms, 5.0);
         assert_eq!(stats.recent[0].accumulated_tokens_in, 2);
         assert_eq!(stats.recent[0].accumulated_tokens_out, 3);

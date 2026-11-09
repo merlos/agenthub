@@ -78,6 +78,7 @@ pub struct ProviderTokenStat {
     pub provider: String,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    pub average_tokens_per_second: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]

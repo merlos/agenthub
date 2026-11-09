@@ -26,7 +26,7 @@ export interface DashboardStats {
   tokensOut: number;
   averageDurationMs: number;
   p95DurationMs: number;
-  providerTokens: Array<{ provider: string; tokensIn: number; tokensOut: number }>;
+  providerTokens: Array<{ provider: string; tokensIn: number; tokensOut: number; averageTokensPerSecond: number }>;
   daily: Array<{ day: string; requests: number }>;
   recent: RequestStat[];
 }
