@@ -1,0 +1,10 @@
+[server]
+# Loopback is intentional. Do not expose provider access to the network.
+bind = "127.0.0.1"
+port_start = 43100
+port_end = 43999
+request_timeout_seconds = 300
+
+[privacy]
+# WARNING: when true, complete prompts and responses are stored in agenthub.db.
+log_conversations = false
