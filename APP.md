@@ -67,10 +67,29 @@ appear with zero token counts.
 
 The overview displays request count, success rate, input/output tokens,
 average latency, P95 latency, 30-day traffic, and recent requests. The Providers
-page displays input, output, total token usage, and average output tokens per
-second within each provider listing across the retained request history.
-Request dates use `yyyy-mm-dd`, durations use human-friendly units, and the
-request log can be filtered by its displayed metadata. Each log entry shows
+page displays only total tokens across retained history and month tokens for
+the current billing period. Each provider has a statistics icon linking to a
+dedicated page with input, output, total tokens, average tokens per request,
+and average output tokens per second for the billing period and retained history.
+The billing start day is saved independently per provider (1–31, default 1);
+shorter months use their last day. Changing it recalculates the billing period
+without changing request history. Dates and billing boundaries use UTC.
+
+Daily input/output consumption is shown for the latest days that fit the chart
+(7–30 days), with exact counts and average output tokens/s on hover, keyboard
+focus, or tap. Monthly input/output consumption covers the latest 12 calendar
+months, including the partial current month. Dates without usage show zero.
+Average tokens/request includes all recorded requests. Average output tokens/s
+is the arithmetic mean of per-request output tokens divided by total request
+duration, excluding zero-duration requests; it is not generation-only speed.
+Statistics cover only traffic through agenthub. Metadata retention still applies:
+previously pruned history cannot be recovered, and total tokens are not lifetime
+totals when retention is limited.
+Request dates use `yyyy-mm-dd` and durations use human-friendly units. The
+request log auto-refreshes every 5 seconds by default. Use the Disable
+auto-refresh button to pause updates, or Enable auto-refresh to resume.
+Polling stops when leaving the page, and the text filter remains active during updates.
+The request log can be filtered by its displayed metadata. Each log entry shows
 input/output tokens for that request and the accumulated input/output totals.
 Authentication failures are recorded without storing the supplied credential.
 

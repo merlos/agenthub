@@ -2,6 +2,7 @@ mod config;
 mod conversation_log;
 mod db;
 mod model;
+mod provider_stats;
 mod proxy;
 
 use db::Database;
@@ -269,6 +270,21 @@ fn dashboard_stats(state: State<AppState>) -> Result<DashboardStats> {
     state.db.stats().map_err(safe_error)
 }
 
+#[tauri::command]
+fn list_provider_usage(state: State<AppState>) -> Result<Vec<ProviderUsage>> {
+    state.db.provider_usage().map_err(safe_error)
+}
+
+#[tauri::command]
+fn provider_stats(state: State<AppState>, id: String) -> Result<ProviderStats> {
+    state.db.provider_stats(&id).map_err(safe_error)
+}
+
+#[tauri::command]
+fn set_provider_billing_start_day(state: State<AppState>, id: String, day: u32) -> Result<()> {
+    state.db.set_billing_start_day(&id, day).map_err(safe_error)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Settings {
@@ -383,6 +399,9 @@ pub fn run() {
             delete_application,
             regenerate_application_key,
             dashboard_stats,
+            list_provider_usage,
+            provider_stats,
+            set_provider_billing_start_day,
             get_settings
         ])
         .run(tauri::generate_context!())

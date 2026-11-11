@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ const stat = { id: 1, application: "OpenCode", provider: "OpenAI", model: "gpt",
 
 function responses(command: string) {
   if (command === "list_providers") return Promise.resolve([provider]);
+  if (command === "list_provider_usage") return Promise.resolve([{ providerId: "p1", totalTokens: 5, monthTokens: 3, periodStart: "2026-01-01", periodEnd: "2026-01-31" }]);
   if (command === "list_applications") return Promise.resolve([application]);
   if (command === "dashboard_stats") return Promise.resolve({ requests: 1, successRate: 100, tokensIn: 2, tokensOut: 3, averageDurationMs: 40, p95DurationMs: 55, providerTokens: [{ provider: "OpenAI", tokensIn: 2, tokensOut: 3, averageTokensPerSecond: 75 }], daily: [{ day: "2025-12-31", requests: 0 }, { day: "2026-01-01", requests: 2 }], recent: [stat] });
   if (command === "get_settings") return Promise.resolve({ logConversations: false, configPath: "/home/a/config.toml", conversationLogPath: "/home/a/conversations", conversationRetentionDays: 30, requestMetadataDays: 0 });
@@ -21,7 +22,7 @@ function responses(command: string) {
 function page(path: string) { return render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>); }
 
 describe("App", () => {
-  beforeEach(() => invoke.mockReset().mockImplementation(responses));
+  beforeEach(() => { invoke.mockReset().mockImplementation(responses); });
   it("shows dashboard metrics and request rows", async () => { page("/"); expect(await screen.findByText("100.0%")).toBeInTheDocument(); expect(screen.getByText("55ms")).toBeInTheDocument(); expect(screen.queryByText("Token usage by provider")).not.toBeInTheDocument(); expect(screen.getByText("30-day traffic")).toBeInTheDocument(); expect(screen.getByText("/chat/completions")).toBeInTheDocument(); expect(screen.getByText("2026-01-01")).toBeInTheDocument(); expect(screen.getAllByText("OpenCode").length).toBeGreaterThan(0); });
   it("shows and edits applications", async () => {
     const user=userEvent.setup(); page("/applications"); expect((await screen.findAllByText("OpenCode")).length).toBeGreaterThan(0); await user.click(screen.getByText("Edit connection")); await user.clear(screen.getByLabelText("Application name")); await user.type(screen.getByLabelText("Application name"),"Editor"); await user.click(screen.getByText("Save changes")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_application",expect.objectContaining({application:expect.objectContaining({name:"Editor"})})));
@@ -33,7 +34,7 @@ describe("App", () => {
     const user=userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode"); await user.click(screen.getByLabelText("Stop")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_application",expect.objectContaining({application:expect.objectContaining({enabled:false})}))); await user.click(screen.getByLabelText("Regenerate key")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("regenerate_application_key",{id:"a1"}));
   });
   it("creates, defaults, edits, and deletes providers", async () => {
-    const user=userEvent.setup(); page("/providers"); expect((await screen.findAllByText("OpenAI")).length).toBeGreaterThan(0); expect(screen.queryByText("Token usage by provider")).not.toBeInTheDocument(); expect(screen.getByText("Total tokens")).toBeInTheDocument(); expect(screen.getByText("Avg. tok/s")).toBeInTheDocument(); expect(screen.getByText("75")).toBeInTheDocument(); await user.click(screen.getByText("Add provider")); expect(screen.getByText("Load models")).toBeDisabled(); await user.selectOptions(screen.getByLabelText("Provider type"),"deepseek"); expect(screen.getByDisplayValue("https://api.deepseek.com/v1")).toBeInTheDocument(); await user.type(screen.getByLabelText("API key"),"secret"); expect(screen.getByText("Load models")).toBeEnabled(); await user.click(screen.getByText("Save provider")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_provider",expect.anything()));
+    const user=userEvent.setup(); page("/providers"); expect((await screen.findAllByText("OpenAI")).length).toBeGreaterThan(0); expect(screen.queryByText("Token usage by provider")).not.toBeInTheDocument(); expect(screen.getByText("Total tokens")).toBeInTheDocument(); expect(screen.getByText("Month tokens")).toBeInTheDocument(); expect(screen.queryByText("Input tokens")).not.toBeInTheDocument(); expect(screen.queryByText("Output tokens")).not.toBeInTheDocument(); expect(screen.queryByText("Avg. tok/s")).not.toBeInTheDocument(); expect(screen.getByText("5")).toBeInTheDocument(); expect(screen.getByText("3")).toBeInTheDocument(); expect(screen.getByRole("link", {name:"Statistics for OpenAI"})).toHaveAttribute("href","/providers/p1/stats"); await user.click(screen.getByText("Add provider")); expect(screen.getByText("Load models")).toBeDisabled(); await user.selectOptions(screen.getByLabelText("Provider type"),"deepseek"); expect(screen.getByDisplayValue("https://api.deepseek.com/v1")).toBeInTheDocument(); await user.type(screen.getByLabelText("API key"),"secret"); expect(screen.getByText("Load models")).toBeEnabled(); await user.click(screen.getByText("Save provider")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_provider",expect.anything()));
     const buttons=screen.getAllByLabelText("Delete"); await user.click(buttons[0]); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("delete_provider",{id:"p1"}));
   });
   it("configures Ollama without an API key", async () => {
@@ -43,6 +44,57 @@ describe("App", () => {
     const rows=[stat,{...stat,id:2,application:"Terminal",durationMs:30_000},{...stat,id:3,application:"Long task",durationMs:393_000},{...stat,id:4,application:"Minute task",durationMs:60_000}];
     invoke.mockImplementation((command:string)=>command==="dashboard_stats"?Promise.resolve({...responses,requests:4,daily:[],recent:rows}):responses(command));
     const user=userEvent.setup(); const view=page("/logs"); expect(await screen.findByText("40ms")).toBeInTheDocument(); expect(screen.getByText("Tokens (in/out)")).toBeInTheDocument(); expect(screen.getByText("Accumulated (in/out)")).toBeInTheDocument(); expect(screen.getAllByText("2 / 3").length).toBeGreaterThan(0); expect(screen.getAllByText("12 / 23").length).toBeGreaterThan(0); expect(screen.getByText("30s")).toBeInTheDocument(); expect(screen.getByText("6m 33s")).toBeInTheDocument(); expect(screen.getByText("1m")).toBeInTheDocument(); const filter=screen.getByLabelText("Filter requests"); await user.type(filter,"terminal"); expect(screen.getByText("Terminal")).toBeInTheDocument(); expect(screen.queryByText("Long task")).not.toBeInTheDocument(); await user.clear(filter); await user.type(filter,"no match"); expect(screen.getByText("No matching requests")).toBeInTheDocument(); view.unmount(); page("/settings"); expect(await screen.findByText("Disabled by default")).toBeInTheDocument(); expect(screen.getByText("/home/a/config.toml")).toBeInTheDocument();
+  });
+  it("auto-refreshes logs, preserves filters, and pauses and resumes polling", async () => {
+    vi.useFakeTimers();
+    const view = page("/logs");
+    try {
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: "Disable auto-refresh" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.change(screen.getByLabelText("Filter requests"), { target: { value: "terminal" } });
+      expect(screen.getByText("No matching requests")).toBeInTheDocument();
+      invoke.mockImplementation(command => command === "dashboard_stats" ? Promise.resolve({ recent: [{ ...stat, application: "Terminal" }] }) : responses(command));
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(screen.getByText("Terminal")).toBeInTheDocument();
+      expect(screen.getByLabelText("Filter requests")).toHaveValue("terminal");
+      fireEvent.click(screen.getByRole("button", { name: "Disable auto-refresh" }));
+      const count = invoke.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(invoke).toHaveBeenCalledTimes(count);
+      fireEvent.click(screen.getByRole("button", { name: "Enable auto-refresh" }));
+      await act(async () => {});
+      expect(invoke).toHaveBeenCalledTimes(count + 1);
+      view.unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(invoke).toHaveBeenCalledTimes(count + 1);
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+  it("reports refresh errors and recovers on the next poll", async () => {
+    vi.useFakeTimers();
+    invoke.mockRejectedValueOnce(new Error("logs offline"));
+    const view = page("/logs");
+    try {
+      await act(async () => {});
+      expect(screen.getByText(/logs offline/)).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(screen.queryByText(/logs offline/)).not.toBeInTheDocument();
+      expect(screen.getByText("OpenCode")).toBeInTheDocument();
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+  it.each([false, true])("ignores in-flight refresh results after leaving the page (failure: %s)", async failure => {
+    vi.useFakeTimers();
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: Error) => void;
+    invoke.mockImplementation(() => new Promise((ok, fail) => { resolve = ok; reject = fail; }));
+    const view = page("/logs");
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      view.unmount();
+      await act(async () => { if (failure) reject(new Error("late error")); else resolve({ recent: [stat] }); });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); vi.useRealTimers(); }
   });
   it("closes dialogs with cancel, close, and backdrop", async () => { const user=userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode"); await user.click(screen.getByText("Add application")); await user.click(screen.getByText("Cancel")); expect(screen.queryByText("Create application")).not.toBeInTheDocument(); await user.click(screen.getByText("Add application")); await user.click(screen.getByLabelText("Close")); await user.click(screen.getByText("Add application")); fireEvent.mouseDown(document.querySelector(".modal-bg")!); expect(screen.queryByText("Create application")).not.toBeInTheDocument(); });
   it("renders stopped apps, fallback providers, and copy feedback", async () => {

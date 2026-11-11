@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Application, DashboardStats, Provider, Settings } from "./types";
+import type { Application, DashboardStats, Provider, ProviderStats, ProviderUsage, Settings } from "./types";
 
 export const api = {
   providers: () => invoke<Provider[]>("list_providers"),
@@ -12,5 +12,8 @@ export const api = {
   deleteApplication: (id: string) => invoke<void>("delete_application", { id }),
   regenerateKey: (id: string) => invoke<Application>("regenerate_application_key", { id }),
   stats: () => invoke<DashboardStats>("dashboard_stats"),
+  providerUsage: () => invoke<ProviderUsage[]>("list_provider_usage"),
+  providerStats: (id: string) => invoke<ProviderStats>("provider_stats", { id }),
+  setProviderBillingStartDay: (id: string, day: number) => invoke<void>("set_provider_billing_start_day", { id, day }),
   settings: () => invoke<Settings>("get_settings"),
 };

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity, AppWindow, BarChart3, Box, Check, Copy, KeyRound, Plus, Power, RefreshCw, Search, Server, Settings as SettingsIcon, ShieldCheck, Trash2, X } from "lucide-react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api";
-import type { Application, DashboardStats, Provider, ProviderKind, Settings } from "./types";
+import type { Application, DashboardStats, Provider, ProviderKind, ProviderUsage, Settings } from "./types";
+import ProviderStatsPage from "./ProviderStatsPage";
 
 const providerDefaults: Record<ProviderKind, { url: string; model: string; hint: string }> = {
   openai: { url: "https://api.openai.com/v1", model: "gpt-4o-mini", hint: "Create a secret key in platform.openai.com/api-keys." },
@@ -31,7 +32,7 @@ function Layout() {
       </nav>
       <div className="secure"><ShieldCheck/><div><b>Local & secure</b><small>Secrets stay on this device</small></div></div>
     </aside>
-    <main><Routes><Route path="/" element={<Dashboard/>}/><Route path="/applications" element={<Applications/>}/><Route path="/providers" element={<Providers/>}/><Route path="/logs" element={<Logs/>}/><Route path="/settings" element={<SettingsPage/>}/></Routes></main>
+    <main><Routes><Route path="/" element={<Dashboard/>}/><Route path="/applications" element={<Applications/>}/><Route path="/providers" element={<Providers/>}/><Route path="/providers/:id/stats" element={<ProviderStatsPage/>}/><Route path="/logs" element={<Logs/>}/><Route path="/settings" element={<SettingsPage/>}/></Routes></main>
   </div>;
 }
 
@@ -39,7 +40,6 @@ const Header = ({ title, subtitle, action }: { title: string; subtitle: string; 
 const Empty = ({ icon: Icon, title, text }: { icon: typeof Server; title: string; text: string }) => <div className="empty"><Icon/><h3>{title}</h3><p>{text}</p></div>;
 const ErrorBox = ({ message }: { message: string }) => message ? <div className="error">{message}</div> : null;
 const number = (value: number) => new Intl.NumberFormat().format(value);
-const decimal = (value: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value);
 const formatDate = (value: string) => value.slice(0, 10);
 const formatDuration = (milliseconds: number) => {
   if (milliseconds < 1_000) return `${Math.round(milliseconds)}ms`;
@@ -82,11 +82,11 @@ function ApplicationDialog({ app, providers, onClose, onSave }: { app: Partial<A
 }
 
 function Providers() {
-  const [items, setItems] = useState<Provider[]>([]), [stats, setStats] = useState<DashboardStats>(), [editing, setEditing] = useState<Partial<Provider>>(), [error, setError] = useState("");
-  const reload = useCallback(() => Promise.all([api.providers().then(setItems), api.stats().then(setStats)]).catch(e => setError(String(e))), []);
+  const [items, setItems] = useState<Provider[]>([]), [stats, setStats] = useState<ProviderUsage[]>([]), [editing, setEditing] = useState<Partial<Provider>>(), [error, setError] = useState("");
+  const reload = useCallback(() => Promise.all([api.providers().then(setItems), api.providerUsage().then(setStats)]).catch(e => setError(String(e))), []);
   useEffect(() => { void reload(); }, [reload]);
   const remove = async (id: string) => { if (confirm("Delete this provider? Applications using it will fall back to the default.")) { await api.deleteProvider(id); await reload(); } };
-  return <><Header title="Providers" subtitle="Manage credentials and model endpoints" action={<button className="primary" onClick={() => setEditing({})}><Plus/>Add provider</button>}/><ErrorBox message={error}/><div className="provider-list">{items.map(p => { const usage = stats?.providerTokens.find(item => item.provider === p.name); return <article key={p.id}><div className="provider-logo">{p.name.slice(0,2).toUpperCase()}</div><div className="provider-details grow"><div className="row"><h3>{p.name}</h3>{p.isDefault && <span className="badge">Default</span>}</div><p>{p.kind} · {p.defaultModel}</p><small>{p.baseUrl}</small></div><dl className="provider-stats"><div><dt>Input tokens</dt><dd>{number(usage?.tokensIn ?? 0)}</dd></div><div><dt>Output tokens</dt><dd>{number(usage?.tokensOut ?? 0)}</dd></div><div><dt>Total tokens</dt><dd>{number((usage?.tokensIn ?? 0) + (usage?.tokensOut ?? 0))}</dd></div><div><dt>Avg. tok/s</dt><dd>{decimal(usage?.averageTokensPerSecond ?? 0)}</dd></div></dl><div className="provider-actions"><span className={p.hasSecret || !providerNeedsKey(p.kind) ? "status good" : "status warn"}>{p.hasSecret ? "Connected" : providerNeedsKey(p.kind) ? "No key" : "Local"}</span>{!p.isDefault && <button className="secondary" onClick={() => void api.setDefaultProvider(p.id).then(reload)}>Make default</button>}<button className="icon" aria-label="Edit" onClick={() => setEditing(p)}><SettingsIcon/></button><button className="icon danger" aria-label="Delete" onClick={() => void remove(p.id)}><Trash2/></button></div></article>; })}</div>{!items.length && <Empty icon={Server} title="Add your first provider" text="Connect OpenAI, Anthropic, Google, Azure, AWS, OpenRouter, DeepSeek, Ollama, or any compatible endpoint."/>}{editing && <ProviderDialog provider={editing} onClose={() => setEditing(undefined)} onSave={async p => { try { await api.saveProvider(p); setEditing(undefined); await reload(); } catch(e) { setError(String(e)); } }}/>}</>;
+  return <><Header title="Providers" subtitle="Manage credentials and model endpoints" action={<button className="primary" onClick={() => setEditing({})}><Plus/>Add provider</button>}/><ErrorBox message={error}/><div className="provider-list">{items.map(p => { const usage = stats.find(item => item.providerId === p.id); return <article key={p.id}><div className="provider-logo">{p.name.slice(0,2).toUpperCase()}</div><div className="provider-details grow"><div className="row"><h3>{p.name}</h3>{p.isDefault && <span className="badge">Default</span>}</div><p>{p.kind} · {p.defaultModel}</p><small>{p.baseUrl}</small></div><dl className="provider-stats"><div><dt>Total tokens</dt><dd>{number(usage?.totalTokens ?? 0)}</dd></div><div title={usage ? `Billing period: ${usage.periodStart} – ${usage.periodEnd} (UTC)` : undefined}><dt>Month tokens</dt><dd>{number(usage?.monthTokens ?? 0)}</dd></div></dl><div className="provider-actions"><span className={p.hasSecret || !providerNeedsKey(p.kind) ? "status good" : "status warn"}>{p.hasSecret ? "Connected" : providerNeedsKey(p.kind) ? "No key" : "Local"}</span>{!p.isDefault && <button className="secondary" onClick={() => void api.setDefaultProvider(p.id).then(reload)}>Make default</button>}<Link className="icon" to={`/providers/${encodeURIComponent(p.id)}/stats`} aria-label={`Statistics for ${p.name}`} title="Provider statistics"><BarChart3/></Link><button className="icon" aria-label="Edit" onClick={() => setEditing(p)}><SettingsIcon/></button><button className="icon danger" aria-label="Delete" onClick={() => void remove(p.id)}><Trash2/></button></div></article>; })}</div>{!items.length && <Empty icon={Server} title="Add your first provider" text="Connect OpenAI, Anthropic, Google, Azure, AWS, OpenRouter, DeepSeek, Ollama, or any compatible endpoint."/>}{editing && <ProviderDialog provider={editing} onClose={() => setEditing(undefined)} onSave={async p => { try { await api.saveProvider(p); setEditing(undefined); await reload(); } catch(e) { setError(String(e)); } }}/>}</>;
 }
 
 function ProviderDialog({ provider, onClose, onSave }: { provider: Partial<Provider>; onClose: () => void; onSave: (p: Omit<Provider,"hasSecret"> & { apiKey?: string }) => void }) {
@@ -101,10 +101,28 @@ function ProviderDialog({ provider, onClose, onSave }: { provider: Partial<Provi
 function Logs() {
   const [stats, setStats] = useState<DashboardStats>();
   const [filter, setFilter] = useState("");
-  useEffect(() => { void api.stats().then(setStats); }, []);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!autoRefresh) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const next = await api.stats();
+        if (active) { setStats(next); setError(""); }
+      } catch (e) {
+        if (active) setError(String(e));
+      } finally {
+        if (active) timer = setTimeout(() => void refresh(), 5_000);
+      }
+    };
+    void refresh();
+    return () => { active = false; clearTimeout(timer); };
+  }, [autoRefresh]);
   const query = filter.trim().toLocaleLowerCase();
   const rows = stats?.recent.filter(row => !query || [formatDate(row.createdAt), row.application, row.provider, row.model, row.endpoint, row.modality, row.status, row.tokensIn, row.tokensOut, row.accumulatedTokensIn, row.accumulatedTokensOut, row.errorType ?? ""].some(value => String(value).toLocaleLowerCase().includes(query))) ?? [];
-  return <><Header title="Request logs" subtitle="Metadata for requests passing through agenthub"/><section className="panel"><div className="log-tools"><Search aria-hidden="true"/><label><span className="sr-only">Filter requests</span><input type="search" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter requests…"/></label></div>{rows.length ? <RequestTable rows={rows} showAccumulated/> : stats?.recent.length ? <Empty icon={Search} title="No matching requests" text="Try a different filter."/> : <Empty icon={Activity} title="No request metadata" text="Status, latency, token usage, and model information will appear here."/>}</section></>;
+  return <><Header title="Request logs" subtitle="Metadata for requests passing through agenthub" action={<button className="secondary" aria-pressed={autoRefresh} onClick={() => setAutoRefresh(!autoRefresh)}><RefreshCw/>{autoRefresh ? "Disable auto-refresh" : "Enable auto-refresh"}</button>}/><ErrorBox message={error}/><section className="panel"><div className="log-tools"><Search aria-hidden="true"/><label><span className="sr-only">Filter requests</span><input type="search" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter requests…"/></label></div>{rows.length ? <RequestTable rows={rows} showAccumulated/> : stats?.recent.length ? <Empty icon={Search} title="No matching requests" text="Try a different filter."/> : <Empty icon={Activity} title="No request metadata" text="Status, latency, token usage, and model information will appear here."/>}</section></>;
 }
 
 function SettingsPage() {

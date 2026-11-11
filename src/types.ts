@@ -10,6 +10,39 @@ export interface Provider {
   hasSecret: boolean;
 }
 
+export interface ProviderUsage {
+  providerId: string;
+  totalTokens: number;
+  monthTokens: number;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface TokenSummary {
+  requests: number;
+  tokensIn: number;
+  tokensOut: number;
+  totalTokens: number;
+  averageTokens: number;
+  averageTokensPerSecond: number;
+}
+
+export interface TokenBucket extends TokenSummary {
+  date: string;
+}
+
+export interface ProviderStats {
+  providerId: string;
+  providerName: string;
+  billingStartDay: number;
+  periodStart: string;
+  periodEnd: string;
+  current: TokenSummary;
+  historical: TokenSummary;
+  daily: TokenBucket[];
+  monthly: TokenBucket[];
+}
+
 export interface Application {
   id: string;
   name: string;

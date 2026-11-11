@@ -61,7 +61,7 @@ impl Database {
             transaction.execute("UPDATE providers SET is_default=0", [])?;
         }
         transaction.execute(
-            "INSERT INTO providers VALUES(?,?,?,?,?,?)
+            "INSERT INTO providers(id,name,kind,base_url,default_model,is_default) VALUES(?,?,?,?,?,?)
              ON CONFLICT(id) DO UPDATE SET
                name=excluded.name, kind=excluded.kind, base_url=excluded.base_url,
                default_model=excluded.default_model, is_default=excluded.is_default",
@@ -309,6 +309,39 @@ impl Database {
             recent,
         })
     }
+
+    pub fn provider_usage(&self) -> anyhow::Result<Vec<ProviderUsage>> {
+        crate::provider_stats::list_usage(
+            &self.connection.lock().unwrap(),
+            chrono::Utc::now().date_naive(),
+        )
+    }
+
+    pub fn provider_stats(&self, id: &str) -> anyhow::Result<ProviderStats> {
+        crate::provider_stats::stats(
+            &self.connection.lock().unwrap(),
+            id,
+            chrono::Utc::now().date_naive(),
+        )
+    }
+
+    pub fn set_billing_start_day(&self, id: &str, day: u32) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=31).contains(&day),
+            "Billing start day must be between 1 and 31"
+        );
+        let connection = self.connection.lock().unwrap();
+        anyhow::ensure!(
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?)",
+                [id],
+                |row| row.get::<_, bool>(0)
+            )?,
+            "Provider not found"
+        );
+        connection.execute("INSERT INTO provider_billing(provider_id,start_day) VALUES(?,?) ON CONFLICT(provider_id) DO UPDATE SET start_day=excluded.start_day", params![id, day])?;
+        Ok(())
+    }
 }
 
 fn provider_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
@@ -376,6 +409,16 @@ fn migrate(connection: &mut Connection) -> anyhow::Result<()> {
              UPDATE requests SET request_body=NULL,response_body=NULL;
              PRAGMA user_version=2;",
         )?;
+    }
+    if version < 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE provider_billing(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+                start_day INTEGER NOT NULL DEFAULT 1 CHECK(start_day BETWEEN 1 AND 31));
+             CREATE INDEX requests_provider_date ON requests(provider_id,created_at);
+             PRAGMA user_version=3;",
+        )?;
+        transaction.commit()?;
     }
     Ok(())
 }
@@ -466,5 +509,121 @@ mod tests {
         assert!(stats.provider_tokens.is_empty());
         assert!(stats.daily.iter().all(|day| day.requests == 0));
         assert!(reopened.applications().unwrap().is_empty());
+    }
+
+    #[test]
+    fn provider_billing_statistics_and_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stats.db");
+        let database = Database::open(&path).unwrap();
+        let mut first = provider("p1");
+        first.name = "Same name".into();
+        let mut second = provider("p2");
+        second.name = first.name.clone();
+        database.save_provider(&first).unwrap();
+        database.save_provider(&second).unwrap();
+        assert!(database.set_billing_start_day("p1", 0).is_err());
+        assert!(database.set_billing_start_day("p1", 32).is_err());
+        assert!(database.set_billing_start_day("missing", 15).is_err());
+        assert!(database.provider_stats("missing").is_err());
+        assert_eq!(database.provider_stats("p1").unwrap().billing_start_day, 1);
+        assert_eq!(database.provider_usage().unwrap().len(), 2);
+        {
+            let connection = database.connection.lock().unwrap();
+            // Recreate a v2 database to verify the upgrade preserves existing data.
+            connection.execute_batch("DROP TABLE provider_billing; DROP INDEX requests_provider_date; PRAGMA user_version=2;").unwrap();
+            for (id, timestamp, input, output, duration) in [
+                ("p1", "2025-12-01T00:00:00Z", 10, 20, 1000),
+                ("p1", "2026-10-14T23:59:59Z", 1, 1, 0),
+                ("p1", "2026-10-15T00:00:00Z", 2, 4, 1000),
+                ("p1", "2026-11-11T12:00:00Z", 3, 6, 2000),
+                ("p1", "2026-11-11T13:00:00Z", 5, 10, 0),
+                ("p1", "2026-11-15T00:00:00Z", 7, 14, 1000),
+                ("p2", "2026-11-11T12:00:00Z", 100, 200, 1000),
+            ] {
+                connection.execute("INSERT INTO requests(provider_id,created_at,tokens_in,tokens_out,duration_ms) VALUES(?,?,?,?,?)", params![id, timestamp, input, output, duration]).unwrap();
+            }
+        }
+        drop(database);
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.provider_stats("p1").unwrap().billing_start_day, 1);
+        database.set_billing_start_day("p1", 15).unwrap();
+        database.set_billing_start_day("p1", 16).unwrap();
+        database.set_billing_start_day("p1", 15).unwrap();
+        first.name = "Renamed".into();
+        database.save_provider(&first).unwrap();
+        let today = "2026-11-11".parse().unwrap();
+        {
+            let connection = database.connection.lock().unwrap();
+            let stats = crate::provider_stats::stats(&connection, "p1", today).unwrap();
+            assert_eq!(stats.provider_name, "Renamed");
+            assert_eq!(stats.billing_start_day, 15);
+            assert_eq!(stats.period_start, "2026-10-15");
+            assert_eq!(stats.period_end, "2026-11-14");
+            assert_eq!(stats.current.requests, 3);
+            assert_eq!(stats.current.tokens_in, 10);
+            assert_eq!(stats.current.tokens_out, 20);
+            assert_eq!(stats.current.total_tokens, 30);
+            assert_eq!(stats.current.average_tokens, 10.0);
+            assert_eq!(stats.current.average_tokens_per_second, 3.5);
+            assert_eq!(stats.historical.total_tokens, 83);
+            assert_eq!(stats.daily.len(), 30);
+            assert_eq!(stats.daily[0].date, "2026-10-13");
+            assert_eq!(stats.daily[0].usage.total_tokens, 0);
+            assert_eq!(stats.daily.last().unwrap().usage.total_tokens, 24);
+            assert_eq!(
+                stats.daily.last().unwrap().usage.average_tokens_per_second,
+                3.0
+            );
+            assert_eq!(stats.monthly.len(), 12);
+            assert_eq!(stats.monthly[0].date, "2025-12");
+            assert_eq!(stats.monthly[0].usage.total_tokens, 30);
+            assert_eq!(stats.monthly[1].usage.total_tokens, 0);
+            assert_eq!(stats.monthly.last().unwrap().usage.total_tokens, 24);
+            let usage = crate::provider_stats::list_usage(&connection, today).unwrap();
+            let first = usage.iter().find(|item| item.provider_id == "p1").unwrap();
+            assert_eq!(first.total_tokens, 83);
+            assert_eq!(first.month_tokens, 30);
+            assert_eq!(first.period_start, "2026-10-15");
+            assert_eq!(first.period_end, "2026-11-14");
+            assert_eq!(
+                usage
+                    .iter()
+                    .find(|item| item.provider_id == "p2")
+                    .unwrap()
+                    .month_tokens,
+                300
+            );
+            let json = serde_json::to_value(stats).unwrap();
+            assert_eq!(json["daily"][29]["averageTokensPerSecond"], 3.0);
+            assert_eq!(json["current"]["totalTokens"], 30);
+        }
+        drop(database);
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.provider_stats("p1").unwrap().billing_start_day, 15);
+        database.delete_provider("p1").unwrap();
+        assert_eq!(
+            database
+                .connection
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM provider_billing", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        database.save_provider(&provider("empty")).unwrap();
+        let stats = database.provider_stats("empty").unwrap();
+        assert_eq!(stats.historical.requests, 0);
+        assert_eq!(stats.historical.average_tokens, 0.0);
+        assert_eq!(stats.historical.average_tokens_per_second, 0.0);
+        assert!(stats
+            .daily
+            .iter()
+            .all(|bucket| bucket.usage.total_tokens == 0));
+        assert!(stats
+            .monthly
+            .iter()
+            .all(|bucket| bucket.usage.total_tokens == 0));
     }
 }

@@ -81,6 +81,49 @@ pub struct ProviderTokenStat {
     pub average_tokens_per_second: f64,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenSummary {
+    pub requests: u64,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub total_tokens: u64,
+    pub average_tokens: f64,
+    pub average_tokens_per_second: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenBucket {
+    pub date: String,
+    #[serde(flatten)]
+    pub usage: TokenSummary,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsage {
+    pub provider_id: String,
+    pub total_tokens: u64,
+    pub month_tokens: u64,
+    pub period_start: String,
+    pub period_end: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStats {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub billing_start_day: u32,
+    pub period_start: String,
+    pub period_end: String,
+    pub current: TokenSummary,
+    pub historical: TokenSummary,
+    pub daily: Vec<TokenBucket>,
+    pub monthly: Vec<TokenBucket>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardStats {
