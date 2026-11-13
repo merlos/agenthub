@@ -33,6 +33,30 @@ errors are returned explicitly instead of sending an invalid upstream request.
 
 ## OpenAI-compatible API
 
+Application connections have three model-access modes:
+
+- **Default model only** (the default for new and migrated connections): only
+  the effective provider's configured default model is listed and permitted.
+- **Selected models**: load available models in the connection form and check
+  the model IDs to allow. An empty selection blocks every model request.
+- **All provider models**: discover the effective provider's complete model
+  list on each request, including new models. Discovery failures return
+  `502 model_discovery_failed`; no broader-access fallback is used. Providers
+  without a working model-list endpoint must use default-only or selected access.
+
+`GET /v1/models` returns only the enabled models. Every inference endpoint,
+including streaming and multipart requests, rejects other models with
+`403 model_not_allowed` before forwarding. JSON requests without a `model`
+use the provider's default only if allowed; multipart requests must specify
+exactly one nonempty `model` field. Invalid or uninspectable request bodies
+return `400 invalid_request_error`.
+
+Changing the provider in the form clears model selections. Connections using
+the default provider follow changes to that provider; selected-model policies
+continue to allow only their saved exact IDs, while all-model policies discover
+the newly effective provider. Provider catalog membership does not guarantee
+that a model supports a particular endpoint or that upstream access is granted.
+
 The local API recognizes:
 
 - `GET /v1/models`
@@ -47,8 +71,9 @@ The local API recognizes:
 - `POST /v1/audio/transcriptions`
 - `POST /v1/audio/translations`
 
-JSON, multipart, binary, and server-sent-event bodies pass through without
-being converted for OpenAI-compatible providers. Streaming Anthropic and
+JSON and multipart requests are inspected for model access; multipart payloads
+and binary or server-sent-event responses pass through without conversion for
+OpenAI-compatible providers. Streaming Anthropic and
 Gemini translation is not yet supported. Image, audio, and embedding
 availability depends on the selected upstream provider and model.
 

@@ -33,6 +33,19 @@ pub struct Application {
     pub api_key: String,
     pub provider_id: Option<String>,
     pub enabled: bool,
+    #[serde(default)]
+    pub model_access: ModelAccess,
+    #[serde(default)]
+    pub allowed_models: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelAccess {
+    #[default]
+    DefaultOnly,
+    Selected,
+    All,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -42,6 +55,8 @@ pub struct ApplicationInput {
     pub name: String,
     pub provider_id: Option<String>,
     pub enabled: Option<bool>,
+    pub model_access: Option<ModelAccess>,
+    pub allowed_models: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize)]

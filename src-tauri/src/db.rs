@@ -116,7 +116,7 @@ impl Database {
     pub fn applications(&self) -> anyhow::Result<Vec<Application>> {
         let connection = self.connection.lock().unwrap();
         let mut query = connection.prepare(
-            "SELECT id,name,port,api_key,provider_id,enabled FROM applications ORDER BY name",
+            "SELECT id,name,port,api_key,provider_id,enabled,model_access,allowed_models FROM applications ORDER BY name",
         )?;
         let applications = query
             .query_map([], application_from_row)?
@@ -128,7 +128,7 @@ impl Database {
         let connection = self.connection.lock().unwrap();
         Ok(connection
             .query_row(
-                "SELECT id,name,port,api_key,provider_id,enabled FROM applications WHERE id=?",
+                "SELECT id,name,port,api_key,provider_id,enabled,model_access,allowed_models FROM applications WHERE id=?",
                 [id],
                 application_from_row,
             )
@@ -137,17 +137,20 @@ impl Database {
 
     pub fn save_application(&self, application: &Application) -> anyhow::Result<()> {
         self.connection.lock().unwrap().execute(
-            "INSERT INTO applications VALUES(?,?,?,?,?,?)
+            "INSERT INTO applications(id,name,port,api_key,provider_id,enabled,model_access,allowed_models) VALUES(?,?,?,?,?,?,?,?)
              ON CONFLICT(id) DO UPDATE SET
                name=excluded.name, api_key=excluded.api_key,
-               provider_id=excluded.provider_id, enabled=excluded.enabled",
+                provider_id=excluded.provider_id, enabled=excluded.enabled,
+                model_access=excluded.model_access, allowed_models=excluded.allowed_models",
             params![
                 application.id,
                 application.name,
                 application.port,
                 application.api_key,
                 application.provider_id,
-                application.enabled
+                application.enabled,
+                serde_json::to_string(&application.model_access)?,
+                serde_json::to_string(&application.allowed_models)?
             ],
         )?;
         Ok(())
@@ -364,6 +367,22 @@ fn application_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Application
         api_key: row.get(3)?,
         provider_id: row.get(4)?,
         enabled: row.get(5)?,
+        model_access: read_json_column(row, 6)?,
+        allowed_models: read_json_column(row, 7)?,
+    })
+}
+
+fn read_json_column<T: serde::de::DeserializeOwned>(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<T> {
+    let value: String = row.get(index)?;
+    serde_json::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
     })
 }
 
@@ -420,12 +439,75 @@ fn migrate(connection: &mut Connection) -> anyhow::Result<()> {
         )?;
         transaction.commit()?;
     }
+    if version < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE applications ADD COLUMN model_access TEXT NOT NULL DEFAULT '\"defaultOnly\"';
+             ALTER TABLE applications ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]';
+             PRAGMA user_version=4;",
+        )?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_and_persists_application_model_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway.db");
+        let db = Database::open(&path).unwrap();
+        let mut application = Application {
+            id: "app".into(),
+            name: "App".into(),
+            port: 43100,
+            api_key: "secret".into(),
+            provider_id: None,
+            enabled: true,
+            model_access: ModelAccess::Selected,
+            allowed_models: vec!["one".into(), "two".into()],
+        };
+        db.save_application(&application).unwrap();
+        assert_eq!(
+            db.applications().unwrap()[0].allowed_models,
+            application.allowed_models
+        );
+        application.model_access = ModelAccess::All;
+        db.save_application(&application).unwrap();
+        assert_eq!(
+            db.application("app").unwrap().unwrap().model_access,
+            ModelAccess::All
+        );
+        {
+            let connection = db.connection.lock().unwrap();
+            connection
+                .execute_batch(
+                    "ALTER TABLE applications DROP COLUMN model_access;
+                 ALTER TABLE applications DROP COLUMN allowed_models;
+                 PRAGMA user_version=3;",
+                )
+                .unwrap();
+        }
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        let row = db.application("app").unwrap().unwrap();
+        assert_eq!(row.model_access, ModelAccess::DefaultOnly);
+        assert!(row.allowed_models.is_empty());
+        assert_eq!(row.port, application.port);
+        assert_eq!(row.api_key, application.api_key);
+        db.connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE applications SET model_access=? WHERE id=?",
+                params!["invalid", "app"],
+            )
+            .unwrap();
+        assert!(db.application("app").is_err());
+    }
 
     fn provider(id: &str) -> Provider {
         Provider {
@@ -457,6 +539,8 @@ mod tests {
             api_key: "old".into(),
             provider_id: Some("p2".into()),
             enabled: true,
+            model_access: ModelAccess::DefaultOnly,
+            allowed_models: vec![],
         };
         database.save_application(&application).unwrap();
         assert_eq!(database.applications().unwrap().len(), 1);
@@ -531,7 +615,14 @@ mod tests {
         {
             let connection = database.connection.lock().unwrap();
             // Recreate a v2 database to verify the upgrade preserves existing data.
-            connection.execute_batch("DROP TABLE provider_billing; DROP INDEX requests_provider_date; PRAGMA user_version=2;").unwrap();
+            connection
+                .execute_batch(
+                    "DROP TABLE provider_billing; DROP INDEX requests_provider_date;
+                ALTER TABLE applications DROP COLUMN model_access;
+                ALTER TABLE applications DROP COLUMN allowed_models;
+                PRAGMA user_version=2;",
+                )
+                .unwrap();
             for (id, timestamp, input, output, duration) in [
                 ("p1", "2025-12-01T00:00:00Z", 10, 20, 1000),
                 ("p1", "2026-10-14T23:59:59Z", 1, 1, 0),

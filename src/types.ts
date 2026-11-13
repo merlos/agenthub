@@ -43,6 +43,8 @@ export interface ProviderStats {
   monthly: TokenBucket[];
 }
 
+export type ModelAccess = "defaultOnly" | "selected" | "all";
+
 export interface Application {
   id: string;
   name: string;
@@ -50,6 +52,8 @@ export interface Application {
   apiKey: string;
   providerId: string | null;
   enabled: boolean;
+  modelAccess: ModelAccess;
+  allowedModels: string[];
 }
 
 export interface DashboardStats {

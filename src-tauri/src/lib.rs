@@ -10,7 +10,6 @@ use model::*;
 use proxy::ProxyManager;
 use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use serde::Serialize;
-use serde_json::Value;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -95,72 +94,17 @@ async fn list_provider_models(provider: ProviderInput) -> Result<Vec<String>> {
         return Err("Enter an API key before loading models".into());
     }
 
-    let base = provider.base_url.trim_end_matches('/');
-    let url = match provider.kind.as_str() {
-        "google" => format!("{base}/models?key={key}"),
-        "azure" => format!("{base}/openai/models?api-version=2024-10-21"),
-        _ => format!("{base}/models"),
-    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|_| "Could not initialize the provider connection".to_string())?;
-    let mut request = client.get(url);
-    request = match provider.kind.as_str() {
-        "azure" => request.header("api-key", &key),
-        "anthropic" => request
-            .header("x-api-key", &key)
-            .header("anthropic-version", "2023-06-01"),
-        "google" => request,
-        _ if !key.is_empty() => request.bearer_auth(&key),
-        _ => request,
-    };
-    let response = request
-        .send()
-        .await
-        .map_err(|_| "Could not connect to the provider model endpoint".to_string())?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "The provider model endpoint returned status {}",
-            response.status().as_u16()
-        ));
-    }
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|_| "The provider returned an invalid model list".to_string())?;
-    let models = parse_provider_models(&body);
-    if models.is_empty() {
-        return Err("The provider returned no models".into());
-    }
-    Ok(models)
+    proxy::discover_models(&client, &provider.kind, &provider.base_url, &key).await
 }
 
 fn provider_secret(id: &str) -> Option<String> {
     keyring::Entry::new("agenthub", id)
         .ok()
         .and_then(|entry| entry.get_password().ok())
-}
-
-fn parse_provider_models(body: &Value) -> Vec<String> {
-    let rows = body
-        .get("data")
-        .or_else(|| body.get("models"))
-        .and_then(Value::as_array);
-    let mut models = rows
-        .into_iter()
-        .flatten()
-        .filter_map(|model| {
-            model
-                .get("id")
-                .or_else(|| model.get("name"))
-                .and_then(Value::as_str)
-                .map(|name| name.strip_prefix("models/").unwrap_or(name).to_string())
-        })
-        .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    models
 }
 
 #[tauri::command]
@@ -204,7 +148,7 @@ async fn save_application(
         Some(id) => state.db.application(id).map_err(safe_error)?,
         None => None,
     };
-    let row = if let Some(mut current) = existing.clone() {
+    let mut row = if let Some(mut current) = existing.clone() {
         current.name = application.name.trim().to_string();
         current.provider_id = application.provider_id;
         current.enabled = application.enabled.unwrap_or(current.enabled);
@@ -217,8 +161,17 @@ async fn save_application(
             api_key: random_key(),
             provider_id: application.provider_id,
             enabled: application.enabled.unwrap_or(true),
+            model_access: ModelAccess::DefaultOnly,
+            allowed_models: vec![],
         }
     };
+    if let Some(access) = application.model_access {
+        row.model_access = access;
+    }
+    if let Some(models) = application.allowed_models {
+        row.allowed_models = models;
+    }
+    row.allowed_models = normalize_model_selection(row.allowed_models)?;
     state.db.save_application(&row).map_err(safe_error)?;
     if row.enabled {
         if let Err(error) = state.proxy.start(row.clone()).await {
@@ -234,6 +187,15 @@ async fn save_application(
         state.proxy.stop(&row.id).await;
     }
     Ok(row)
+}
+
+fn normalize_model_selection(mut models: Vec<String>) -> Result<Vec<String>> {
+    if models.iter().any(|model| model.trim().is_empty()) {
+        return Err("Enabled model IDs cannot be empty".into());
+    }
+    models.sort();
+    models.dedup();
+    Ok(models)
 }
 
 #[tauri::command]
@@ -413,6 +375,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalizes_model_selection_and_validates_access_inputs() {
+        assert!(normalize_model_selection(vec![]).unwrap().is_empty());
+        assert_eq!(
+            normalize_model_selection(vec!["two".into(), "one".into(), "two".into()]).unwrap(),
+            vec!["one", "two"]
+        );
+        for model in ["", " ", "\n"] {
+            assert!(normalize_model_selection(vec![model.into()]).is_err());
+        }
+        for mode in ["defaultOnly", "selected", "all"] {
+            let input: ApplicationInput = serde_json::from_value(serde_json::json!({
+                "name":"Test", "modelAccess":mode, "allowedModels":["one"]
+            }))
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(input.model_access.unwrap()).unwrap(),
+                mode
+            );
+            assert_eq!(input.allowed_models.unwrap(), vec!["one"]);
+        }
+        let input: ApplicationInput =
+            serde_json::from_value(serde_json::json!({"name":"Test"})).unwrap();
+        assert!(input.model_access.is_none());
+        assert!(input.allowed_models.is_none());
+        assert!(
+            serde_json::from_value::<ApplicationInput>(serde_json::json!({
+                "name":"Test","modelAccess":"unknown"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn keys_are_unique_and_well_formed() {
         let first = random_key();
         let second = random_key();
@@ -445,17 +440,17 @@ mod tests {
     #[test]
     fn parses_provider_model_lists() {
         assert_eq!(
-            parse_provider_models(&serde_json::json!({
+            proxy::parse_provider_models(&serde_json::json!({
                 "data": [{"id":"z-model"}, {"id":"a-model"}, {"id":"a-model"}]
             })),
             vec!["a-model", "z-model"]
         );
         assert_eq!(
-            parse_provider_models(&serde_json::json!({
+            proxy::parse_provider_models(&serde_json::json!({
                 "models": [{"name":"models/gemini-flash"}]
             })),
             vec!["gemini-flash"]
         );
-        assert!(parse_provider_models(&serde_json::json!({})).is_empty());
+        assert!(proxy::parse_provider_models(&serde_json::json!({})).is_empty());
     }
 }

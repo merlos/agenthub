@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Activity, AppWindow, BarChart3, Box, Check, Copy, KeyRound, Plus, Power, RefreshCw, Search, Server, Settings as SettingsIcon, ShieldCheck, Trash2, X } from "lucide-react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api";
-import type { Application, DashboardStats, Provider, ProviderKind, ProviderUsage, Settings } from "./types";
+import type { Application, DashboardStats, ModelAccess, Provider, ProviderKind, ProviderUsage, Settings } from "./types";
 import ProviderStatsPage from "./ProviderStatsPage";
 
 const providerDefaults: Record<ProviderKind, { url: string; model: string; hint: string }> = {
@@ -69,16 +69,42 @@ function Applications() {
   const [items, setItems] = useState<Application[]>([]), [providers, setProviders] = useState<Provider[]>([]), [editing, setEditing] = useState<Partial<Application>>(), [error, setError] = useState("");
   const reload = useCallback(() => Promise.all([api.applications(), api.providers()]).then(([a,p]) => { setItems(a); setProviders(p); }).catch(e => setError(String(e))), []);
   useEffect(() => { void reload(); }, [reload]);
-  const save = async (name: string, providerId: string | null) => { try { await api.saveApplication({ ...editing, name, providerId }); setEditing(undefined); await reload(); } catch(e) { setError(String(e)); } };
+  const save = async (connection: Pick<Application, "name" | "providerId" | "modelAccess" | "allowedModels">) => { try { await api.saveApplication({ ...editing, ...connection }); setEditing(undefined); await reload(); } catch(e) { setError(String(e)); } };
   const remove = async (id: string) => { if (confirm("Delete this application and stop its local endpoint?")) { await api.deleteApplication(id); await reload(); } };
   const update = async (application: Application) => { try { await api.saveApplication(application); await reload(); } catch(e) { setError(String(e)); } };
   const regenerate = async (id: string) => { if (confirm("Regenerate this key? Existing client configuration will stop working.")) { try { await api.regenerateKey(id); await reload(); } catch(e) { setError(String(e)); } } };
   return <><Header title="Applications" subtitle="Dedicated, authenticated endpoints for your tools" action={<button className="primary" onClick={() => setEditing({})}><Plus/>Add application</button>}/><ErrorBox message={error}/><div className="cards">{items.map(app => <article className="app-card" key={app.id}><div className="row"><div className="app-icon"><AppWindow/></div><div className="grow"><h3>{app.name}</h3><span className={app.enabled ? "status good" : "status"}>{app.enabled ? "Running" : "Stopped"}</span></div><button className="icon" aria-label={app.enabled ? "Stop" : "Start"} title={app.enabled ? "Stop endpoint" : "Start endpoint"} onClick={() => void update({...app, enabled: !app.enabled})}><Power/></button><button className="icon danger" aria-label="Delete" onClick={() => void remove(app.id)}><Trash2/></button></div><dl><div><dt>Base URL</dt><dd><code>http://localhost:{app.port}/v1</code><CopyButton value={`http://localhost:${app.port}/v1`}/></dd></div><div><dt>API key</dt><dd><code>{app.apiKey.slice(0, 8)}••••••••</code><CopyButton value={app.apiKey}/><button className="copy" aria-label="Regenerate key" title="Regenerate key" onClick={() => void regenerate(app.id)}><RefreshCw/></button></dd></div><div><dt>Provider</dt><dd>{providers.find(p => p.id === app.providerId)?.name ?? "Default provider"}</dd></div></dl><button className="secondary full" onClick={() => setEditing(app)}>Edit connection</button></article>)}</div>{!items.length && <Empty icon={AppWindow} title="Connect your first application" text="Each application receives an isolated port and API key."/>}{editing && <ApplicationDialog app={editing} providers={providers} onClose={() => setEditing(undefined)} onSave={save}/>}</>;
 }
 
-function ApplicationDialog({ app, providers, onClose, onSave }: { app: Partial<Application>; providers: Provider[]; onClose: () => void; onSave: (name: string, provider: string | null) => void }) {
+function ApplicationDialog({ app, providers, onClose, onSave }: { app: Partial<Application>; providers: Provider[]; onClose: () => void; onSave: (connection: Pick<Application, "name" | "providerId" | "modelAccess" | "allowedModels">) => void }) {
   const [name, setName] = useState(app.name ?? ""), [provider, setProvider] = useState(app.providerId ?? "");
-  return <Modal title={app.id ? "Edit application" : "Add application"} onClose={onClose}><form onSubmit={e => { e.preventDefault(); void onSave(name.trim(), provider || null); }}><label>Application name<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. OpenCode"/></label><label>Provider<select value={provider} onChange={e => setProvider(e.target.value)}><option value="">Use default provider</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><p className="help">A unique port and secure API key are generated automatically.</p><DialogActions onClose={onClose} label={app.id ? "Save changes" : "Create application"}/></form></Modal>;
+  const [modelAccess, setModelAccess] = useState<ModelAccess>(app.modelAccess ?? "defaultOnly"), [allowedModels, setAllowedModels] = useState<string[]>(app.allowedModels ?? []), [models, setModels] = useState<string[]>([]), [loadingModels, setLoadingModels] = useState(false), [modelError, setModelError] = useState("");
+  const effectiveProvider = provider ? providers.find(p => p.id === provider) : providers.find(p => p.isDefault) ?? providers[0];
+  const loadModels = async () => {
+    setLoadingModels(true); setModelError("");
+    try { setModels(await api.providerModels(effectiveProvider!)); }
+    catch(e) { setModelError(String(e)); }
+    finally { setLoadingModels(false); }
+  };
+  const choices = [...new Set([...models, ...allowedModels])].sort();
+  return <Modal title={app.id ? "Edit application" : "Add application"} onClose={onClose}>
+    <form onSubmit={e => { e.preventDefault(); void onSave({ name: name.trim(), providerId: provider || null, modelAccess, allowedModels: modelAccess === "selected" ? allowedModels : [] }); }}>
+      <label>Application name<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. OpenCode"/></label>
+      <label>Provider<select disabled={loadingModels} value={provider} onChange={e => { setProvider(e.target.value); setModels([]); setAllowedModels([]); setModelError(""); }}><option value="">Use default provider</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      <label>Model access<select value={modelAccess} onChange={e => setModelAccess(e.target.value as ModelAccess)}>
+        <option value="defaultOnly">Default model only</option><option value="selected">Selected models</option><option value="all">All provider models</option>
+      </select></label>
+      {modelAccess === "defaultOnly" && <p className="help">Only the provider's default model is allowed. Other model requests are blocked.</p>}
+      {modelAccess === "all" && <p className="help">Allow all models returned by the provider, including newly added models. Model discovery must succeed before requests are forwarded.</p>}
+      {modelAccess === "selected" && <>
+        <button type="button" className="secondary" disabled={loadingModels || !effectiveProvider} onClick={() => void loadModels()}>{loadingModels ? "Loading models…" : "Load models"}</button>
+        <ErrorBox message={modelError}/>
+        <fieldset className="model-choices"><legend>Enabled models</legend>{choices.map(model => <label key={model}><input type="checkbox" checked={allowedModels.includes(model)} onChange={e => setAllowedModels(e.target.checked ? [...allowedModels, model] : allowedModels.filter(item => item !== model))}/>{model}</label>)}</fieldset>
+        <p className="help">Only checked models are listed and allowed. Selecting none blocks all model requests. Changing providers clears the selection.</p>
+      </>}
+      <p className="help">A unique port and secure API key are generated automatically.</p><DialogActions onClose={onClose} label={app.id ? "Save changes" : "Create application"}/>
+    </form>
+  </Modal>;
 }
 
 function Providers() {

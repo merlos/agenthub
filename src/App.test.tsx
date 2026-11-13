@@ -27,6 +27,76 @@ describe("App", () => {
   it("shows and edits applications", async () => {
     const user=userEvent.setup(); page("/applications"); expect((await screen.findAllByText("OpenCode")).length).toBeGreaterThan(0); await user.click(screen.getByText("Edit connection")); await user.clear(screen.getByLabelText("Application name")); await user.type(screen.getByLabelText("Application name"),"Editor"); await user.click(screen.getByText("Save changes")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_application",expect.objectContaining({application:expect.objectContaining({name:"Editor"})})));
   });
+  it("selects and saves enabled application models", async () => {
+    invoke.mockImplementation(command => command === "list_provider_models" ? Promise.resolve(["gpt", "other"]) : responses(command));
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Edit connection"));
+    expect(screen.getByLabelText("Model access")).toHaveValue("defaultOnly");
+    await user.selectOptions(screen.getByLabelText("Model access"), "selected");
+    await user.click(screen.getByText("Load models"));
+    await user.click(await screen.findByLabelText("other"));
+    await user.click(screen.getByLabelText("gpt"));
+    await user.click(screen.getByLabelText("gpt"));
+    await user.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_application", expect.objectContaining({
+      application: expect.objectContaining({modelAccess:"selected", allowedModels:["other"]}),
+    })));
+  });
+  it("preserves saved model selections and clears them when the provider changes", async () => {
+    invoke.mockImplementation(command => command === "list_applications" ? Promise.resolve([{...application, modelAccess:"selected", allowedModels:["other"]}]) : responses(command));
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Edit connection"));
+    expect(screen.getByLabelText("other")).toBeChecked();
+    await user.selectOptions(screen.getByLabelText("Provider"), "");
+    expect(screen.queryByLabelText("other")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_application", expect.objectContaining({
+      application: expect.objectContaining({providerId:null, modelAccess:"selected", allowedModels:[]}),
+    })));
+  });
+  it("saves all-model access without preserving a stale allowlist", async () => {
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Edit connection"));
+    await user.selectOptions(screen.getByLabelText("Model access"), "all");
+    expect(screen.getByText(/including newly added models/)).toBeInTheDocument();
+    await user.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_application", expect.objectContaining({
+      application: expect.objectContaining({modelAccess:"all", allowedModels:[]}),
+    })));
+  });
+  it("loads default-provider models and handles loading and discovery errors", async () => {
+    let rejectModels: (error: Error) => void = () => {};
+    invoke.mockImplementation(command => command === "list_provider_models"
+      ? new Promise((_, reject) => { rejectModels = reject; }) : responses(command));
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Add application"));
+    await user.selectOptions(screen.getByLabelText("Model access"), "selected");
+    await user.click(screen.getByText("Load models"));
+    expect(screen.getByText("Loading models…")).toBeDisabled();
+    expect(screen.getByLabelText("Provider")).toBeDisabled();
+    expect(invoke).toHaveBeenCalledWith("list_provider_models", {provider});
+    await act(async () => { rejectModels(new Error("Model endpoint unavailable")); });
+    expect(await screen.findByText(/Model endpoint unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Load models")).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText("Provider"), "p1");
+    expect(screen.queryByText(/Model endpoint unavailable/)).not.toBeInTheDocument();
+  });
+  it("falls back to the first provider when no provider is marked default", async () => {
+    const fallback = {...provider, isDefault:false};
+    invoke.mockImplementation(command => command === "list_providers" ? Promise.resolve([fallback]) : command === "list_provider_models" ? Promise.resolve([]) : responses(command));
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Add application"));
+    await user.selectOptions(screen.getByLabelText("Model access"), "selected");
+    await user.click(screen.getByText("Load models"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_provider_models", {provider:fallback}));
+  });
+  it("disables model discovery when there are no providers", async () => {
+    invoke.mockImplementation(command => command === "list_providers" ? Promise.resolve([]) : responses(command));
+    const user = userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode");
+    await user.click(screen.getByText("Add application"));
+    await user.selectOptions(screen.getByLabelText("Model access"), "selected");
+    expect(screen.getByText("Load models")).toBeDisabled();
+  });
   it("creates and deletes an application", async () => {
     const user=userEvent.setup(); page("/applications"); await screen.findAllByText("OpenCode"); await user.click(screen.getByText("Add application")); await user.type(screen.getByLabelText("Application name"),"New App"); await user.selectOptions(screen.getByLabelText("Provider"),"p1"); await user.click(screen.getByText("Create application")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("save_application",expect.anything())); await user.click(screen.getByLabelText("Delete")); await waitFor(()=>expect(invoke).toHaveBeenCalledWith("delete_application",{id:"a1"}));
   });

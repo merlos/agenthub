@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     conversation_log::ConversationLogger,
     db::Database,
-    model::{Application, Provider, RequestRecord},
+    model::{Application, ModelAccess, Provider, RequestRecord},
 };
 use axum::{
     body::{Body, Bytes},
@@ -27,6 +27,167 @@ struct HandlerState {
     db: Arc<Database>,
     client: reqwest::Client,
     conversations: ConversationLogger,
+}
+
+pub(crate) fn parse_provider_models(body: &Value) -> Vec<String> {
+    let mut models = body
+        .get("data")
+        .or_else(|| body.get("models"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            model
+                .get("id")
+                .or_else(|| model.get("name"))
+                .and_then(Value::as_str)
+        })
+        .filter(|name| !name.is_empty())
+        .map(|name| name.strip_prefix("models/").unwrap_or(name).to_string())
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    models
+}
+
+pub(crate) async fn discover_models(
+    client: &reqwest::Client,
+    kind: &str,
+    base_url: &str,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let base = base_url.trim_end_matches('/');
+    let url = match kind {
+        "azure" => format!("{base}/openai/models?api-version=2024-10-21"),
+        _ => format!("{base}/models"),
+    };
+    let mut models = Vec::new();
+    let mut cursor = None;
+    for _ in 0..100 {
+        let mut request = client.get(&url).timeout(std::time::Duration::from_secs(15));
+        request = match kind {
+            "azure" => request.header("api-key", key),
+            "anthropic" => request
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01"),
+            "google" => request.query(&[("key", key)]),
+            _ if !key.is_empty() => request.bearer_auth(key),
+            _ => request,
+        };
+        if let Some(cursor) = &cursor {
+            request = request.query(&[(
+                if kind == "google" {
+                    "pageToken"
+                } else {
+                    "after_id"
+                },
+                cursor,
+            )]);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Could not connect to the provider model endpoint".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The provider model endpoint returned status {}",
+                response.status().as_u16()
+            ));
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|_| "The provider returned an invalid model list".to_string())?;
+        models.extend(parse_provider_models(&body));
+        cursor = match kind {
+            "google" => body
+                .get("nextPageToken")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            "anthropic" if body.get("has_more").and_then(Value::as_bool) == Some(true) => Some(
+                body.get("last_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "The provider returned an invalid model page".to_string())?
+                    .to_owned(),
+            ),
+            _ => None,
+        };
+        if cursor.is_none() {
+            models.sort();
+            models.dedup();
+            return if models.is_empty() {
+                Err("The provider returned no models".into())
+            } else {
+                Ok(models)
+            };
+        }
+    }
+    Err("The provider returned too many model pages".into())
+}
+
+async fn enabled_models(
+    state: &HandlerState,
+    application: &Application,
+    provider: &Provider,
+    key: &str,
+) -> Result<Vec<String>, ProxyError> {
+    match application.model_access {
+        ModelAccess::DefaultOnly => Ok(vec![provider.default_model.clone()]),
+        ModelAccess::Selected => Ok(application.allowed_models.clone()),
+        ModelAccess::All => discover_models(&state.client, &provider.kind, &provider.base_url, key)
+            .await
+            .map_err(|message| {
+                ProxyError::new(StatusCode::BAD_GATEWAY, message, "model_discovery_failed")
+            }),
+    }
+}
+
+async fn request_model(
+    headers: &HeaderMap,
+    body: &[u8],
+    default_model: &str,
+) -> Result<(Value, String, Vec<u8>), ProxyError> {
+    let invalid = || {
+        ProxyError::new(
+            StatusCode::BAD_REQUEST,
+            "Send a JSON object or multipart form with a valid model ID",
+            "invalid_request_error",
+        )
+    };
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if content_type.starts_with("multipart/form-data") {
+        let boundary = multer::parse_boundary(content_type).map_err(|_| invalid())?;
+        let bytes = Bytes::copy_from_slice(body);
+        let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(bytes) });
+        let mut multipart = multer::Multipart::new(stream, boundary);
+        let mut model = None;
+        while let Some(field) = multipart.next_field().await.map_err(|_| invalid())? {
+            if field.name() == Some("model") {
+                if model.is_some() {
+                    return Err(invalid());
+                }
+                let bytes = field.bytes().await.map_err(|_| invalid())?;
+                model = Some(String::from_utf8(bytes.to_vec()).map_err(|_| invalid())?);
+            }
+        }
+        let model = model
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(invalid)?;
+        return Ok((Value::Null, model, body.to_vec()));
+    }
+    let mut json: Value = serde_json::from_slice(body).map_err(|_| invalid())?;
+    let object = json.as_object_mut().ok_or_else(invalid)?;
+    let model = match object.get("model") {
+        None => default_model.to_owned(),
+        Some(Value::String(model)) if !model.trim().is_empty() => model.clone(),
+        _ => return Err(invalid()),
+    };
+    object.insert("model".into(), json!(model));
+    let encoded = serde_json::to_vec(&json).map_err(internal)?;
+    Ok((json, model, encoded))
 }
 
 pub struct ProxyManager {
@@ -292,10 +453,29 @@ async fn forward_inner(
             "unsupported_provider_capability",
         ));
     }
+    let models = enabled_models(state, &application, &provider, &key)
+        .await
+        .inspect_err(|_| {
+            record(
+                state,
+                &application,
+                Some(&provider),
+                "",
+                endpoint,
+                modality,
+                StatusCode::BAD_GATEWAY,
+                started,
+                body.len(),
+                0,
+                Some("model_discovery_failed"),
+                0,
+                0,
+            );
+        })?;
     if endpoint == "/models" && method == Method::GET {
         let response_body = serde_json::to_vec(&json!({
             "object":"list",
-            "data":[{"id":provider.default_model,"object":"model","owned_by":provider.name}]
+            "data":models.iter().map(|model| json!({"id":model,"object":"model","owned_by":provider.name})).collect::<Vec<_>>()
         }))
         .map_err(internal)?;
         record(
@@ -316,14 +496,32 @@ async fn forward_inner(
         return Ok(json_bytes(StatusCode::OK, response_body));
     }
 
-    let original_json: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let model = original_json
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or(&provider.default_model)
-        .to_owned();
+    let (original_json, model, request_body) =
+        request_model(&headers, body, &provider.default_model).await?;
+    if !models.contains(&model) {
+        record(
+            state,
+            &application,
+            Some(&provider),
+            &model,
+            endpoint,
+            modality,
+            StatusCode::FORBIDDEN,
+            started,
+            body.len(),
+            0,
+            Some("model_not_allowed"),
+            0,
+            0,
+        );
+        return Err(ProxyError::new(
+            StatusCode::FORBIDDEN,
+            "This model is not enabled for this application",
+            "model_not_allowed",
+        ));
+    }
     let wants_stream = original_json.get("stream").and_then(Value::as_bool) == Some(true);
-    let adapted = adapt_request(&provider, path, &model, &key, &original_json, body)?;
+    let adapted = adapt_request(&provider, path, &model, &key, &original_json, &request_body)?;
     if wants_stream && adapted.translated {
         return Err(ProxyError::new(
             StatusCode::NOT_IMPLEMENTED,
@@ -922,6 +1120,341 @@ fn json_response(status: StatusCode, value: Value) -> Response {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn parses_and_validates_request_models() {
+        let headers = HeaderMap::new();
+        let (_, model, encoded) = request_model(&headers, br#"{"messages":[]}"#, "default")
+            .await
+            .unwrap();
+        assert_eq!(model, "default");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&encoded).unwrap()["model"],
+            "default"
+        );
+        for body in [
+            b"invalid".as_slice(),
+            b"[]",
+            br#"{"model":null}"#,
+            br#"{"model":1}"#,
+            br#"{"model":""}"#,
+            br#"{"model":" "}"#,
+        ] {
+            assert_eq!(
+                request_model(&headers, body, "default")
+                    .await
+                    .unwrap_err()
+                    .status,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let (_, model, encoded) =
+            request_model(&headers, br#"{"model":"first","model":"last"}"#, "default")
+                .await
+                .unwrap();
+        assert_eq!(model, "last");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&encoded).unwrap()["model"],
+            "last"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "multipart/form-data; boundary=test".parse().unwrap(),
+        );
+        let body = b"--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n\r\nbinary\r\n--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nspeech\r\n--test--\r\n";
+        let (json, model, encoded) = request_model(&headers, body, "default").await.unwrap();
+        assert_eq!(json, Value::Null);
+        assert_eq!(model, "speech");
+        assert_eq!(encoded, body);
+        for body in [
+            b"--test--\r\n".as_slice(),
+            b"--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\r\n--test--\r\n",
+            b"--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\na\r\n--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nb\r\n--test--\r\n",
+            b"malformed",
+            b"--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\xff\r\n--test--\r\n",
+        ] {
+            assert!(request_model(&headers, body, "default").await.is_err());
+        }
+        headers.insert("content-type", "multipart/form-data".parse().unwrap());
+        assert!(request_model(&headers, body, "default").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn discovers_provider_models_with_authentication_pagination_and_errors() {
+        let router = Router::new().fallback(axum::routing::get(
+            |OriginalUri(uri): OriginalUri, headers: HeaderMap| async move {
+                let path = uri.path();
+                let query = uri.query().unwrap_or("");
+                let response = if path.starts_with("/status/") {
+                    return (StatusCode::UNAUTHORIZED, "denied".to_string());
+                } else if path.starts_with("/invalid/") {
+                    return (StatusCode::OK, "not json".to_string());
+                } else if path.starts_with("/empty/") {
+                    json!({"data":[]})
+                } else if path.starts_with("/missing-cursor/") {
+                    json!({"data":[{"id":"one"}],"has_more":true})
+                } else if path.starts_with("/infinite/") {
+                    json!({"models":[{"name":"models/one"}],"nextPageToken":"again"})
+                } else if path.starts_with("/google/") {
+                    assert!(query.contains("key=secret"));
+                    assert!(headers.get("authorization").is_none());
+                    if query.contains("pageToken=next") {
+                        json!({"models":[{"name":"models/two"}]})
+                    } else {
+                        json!({"models":[{"name":"models/one"}],"nextPageToken":"next"})
+                    }
+                } else if path.starts_with("/anthropic/") {
+                    assert_eq!(headers["x-api-key"], "secret");
+                    assert_eq!(headers["anthropic-version"], "2023-06-01");
+                    if query.contains("after_id=one") {
+                        json!({"data":[{"id":"two"}],"has_more":false})
+                    } else {
+                        json!({"data":[{"id":"one"}],"has_more":true,"last_id":"one"})
+                    }
+                } else if path.starts_with("/azure/") {
+                    assert_eq!(headers["api-key"], "secret");
+                    assert_eq!(path, "/azure/openai/models");
+                    assert_eq!(query, "api-version=2024-10-21");
+                    json!({"data":[{"id":"one"},{"id":"two"}]})
+                } else {
+                    if path.starts_with("/openai/") {
+                        assert_eq!(headers["authorization"], "Bearer secret");
+                    } else {
+                        assert!(headers.get("authorization").is_none());
+                    }
+                    json!({"data":[{"id":"two"},{"id":"one"},{"id":"one"},{},{"id":""},{"id":12}]})
+                };
+                (StatusCode::OK, response.to_string())
+            },
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::new();
+        for kind in ["openai", "anthropic", "google", "azure", "compatible"] {
+            let models = discover_models(
+                &client,
+                kind,
+                &format!("http://{address}/{kind}/"),
+                if kind == "compatible" { "" } else { "secret" },
+            )
+            .await
+            .unwrap();
+            assert_eq!(models, vec!["one", "two"]);
+        }
+        for (path, kind, message) in [
+            ("status", "compatible", "status 401"),
+            ("invalid", "compatible", "invalid model list"),
+            ("empty", "compatible", "no models"),
+            ("missing-cursor", "anthropic", "invalid model page"),
+            ("infinite", "google", "too many model pages"),
+        ] {
+            let error = discover_models(&client, kind, &format!("http://{address}/{path}"), "")
+                .await
+                .unwrap_err();
+            assert!(error.contains(message), "{error}");
+            assert!(!error.contains("secret"));
+        }
+        assert!(discover_models(&client, "compatible", "not a URL", "")
+            .await
+            .unwrap_err()
+            .contains("Could not connect"));
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn enforces_model_access_on_every_endpoint() {
+        let upstream = Router::new()
+            .route(
+                "/v1/models",
+                axum::routing::get(|| async {
+                    axum::Json(json!({"data":[{"id":"model"},{"id":"other"}]}))
+                }),
+            )
+            .route(
+                "/v1/chat/completions",
+                axum::routing::post(|axum::Json(body): axum::Json<Value>| async {
+                    axum::Json(body)
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&directory.path().join("test.db")).unwrap());
+        let mut provider = provider("compatible");
+        provider.base_url = format!("http://{address}/v1");
+        db.save_provider(&provider).unwrap();
+        let mut application = Application {
+            id: "test".into(),
+            name: "Test".into(),
+            port: 43100,
+            api_key: "secret".into(),
+            provider_id: None,
+            enabled: true,
+            model_access: ModelAccess::DefaultOnly,
+            allowed_models: vec![],
+        };
+        db.save_application(&application).unwrap();
+        let state = HandlerState {
+            app_id: application.id.clone(),
+            db: db.clone(),
+            client: reqwest::Client::new(),
+            conversations: ConversationLogger::new(&Config::default().privacy, directory.path()),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+        let list = |response: Response| async {
+            serde_json::from_slice::<Value>(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let response = forward_inner(&state, "/v1/models", Method::GET, headers.clone(), b"")
+            .await
+            .unwrap();
+        assert_eq!(list(response).await["data"][0]["id"], "model");
+        for endpoint in [
+            "/chat/completions",
+            "/completions",
+            "/responses",
+            "/embeddings",
+            "/images/generations",
+            "/images/edits",
+            "/images/variations",
+            "/audio/speech",
+            "/audio/transcriptions",
+            "/audio/translations",
+        ] {
+            let error = forward_inner(
+                &state,
+                endpoint,
+                Method::POST,
+                headers.clone(),
+                br#"{"model":"other","stream":true}"#,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status, StatusCode::FORBIDDEN);
+            assert_eq!(error.kind, "model_not_allowed");
+        }
+        let response = forward_inner(
+            &state,
+            "/v1/chat/completions",
+            Method::POST,
+            headers.clone(),
+            b"{}",
+        )
+        .await
+        .unwrap();
+        assert_eq!(list(response).await["model"], "model");
+        application.model_access = ModelAccess::Selected;
+        application.allowed_models = vec!["other".into()];
+        db.save_application(&application).unwrap();
+        let response = forward_inner(&state, "/models", Method::GET, headers.clone(), b"")
+            .await
+            .unwrap();
+        assert_eq!(
+            list(response).await["data"],
+            json!([{"id":"other","object":"model","owned_by":provider.name}])
+        );
+        assert_eq!(
+            forward_inner(
+                &state,
+                "/chat/completions",
+                Method::POST,
+                headers.clone(),
+                b"{}"
+            )
+            .await
+            .unwrap_err()
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let response = forward_inner(
+            &state,
+            "/v1/chat/completions",
+            Method::POST,
+            headers.clone(),
+            br#"{"model":"other"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(list(response).await["model"], "other");
+        let mut multipart_headers = headers.clone();
+        multipart_headers.insert(
+            "content-type",
+            "multipart/form-data; boundary=test".parse().unwrap(),
+        );
+        let denied = forward_inner(
+            &state,
+            "/v1/audio/transcriptions",
+            Method::POST,
+            multipart_headers,
+            b"--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nmodel\r\n--test--\r\n",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        application.allowed_models.clear();
+        db.save_application(&application).unwrap();
+        let response = forward_inner(&state, "/models", Method::GET, headers.clone(), b"")
+            .await
+            .unwrap();
+        assert_eq!(list(response).await["data"], json!([]));
+        assert!(forward_inner(
+            &state,
+            "/chat/completions",
+            Method::POST,
+            headers.clone(),
+            br#"{"model":"other"}"#
+        )
+        .await
+        .is_err());
+        application.model_access = ModelAccess::All;
+        db.save_application(&application).unwrap();
+        let response = forward_inner(&state, "/models", Method::GET, headers.clone(), b"")
+            .await
+            .unwrap();
+        assert_eq!(list(response).await["data"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            forward_inner(
+                &state,
+                "/chat/completions",
+                Method::POST,
+                headers.clone(),
+                br#"{"model":"unknown"}"#
+            )
+            .await
+            .unwrap_err()
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let response = forward_inner(
+            &state,
+            "/v1/chat/completions",
+            Method::POST,
+            headers.clone(),
+            br#"{"model":"other"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(list(response).await["model"], "other");
+        task.abort();
+        let _ = task.await;
+        assert_eq!(
+            forward_inner(&state, "/models", Method::GET, headers, b"")
+                .await
+                .unwrap_err()
+                .kind,
+            "model_discovery_failed"
+        );
+    }
+
     fn provider(kind: &str) -> Provider {
         Provider {
             id: "provider".into(),
@@ -1086,6 +1619,8 @@ mod tests {
             api_key: "secret".into(),
             provider_id: None,
             enabled: true,
+            model_access: ModelAccess::DefaultOnly,
+            allowed_models: vec![],
         };
         database.save_application(&application).unwrap();
         let mut config = Config::default();
