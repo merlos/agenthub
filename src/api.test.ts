@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 describe("api", () => {
   beforeEach(() => invoke.mockReset().mockResolvedValue(undefined));
   it("maps every operation to its Tauri command", async () => {
-    const { api } = await import("./api");
+    const { api, selectApi, tauriApi } = await import("./api");
     const provider = { id: "p", name: "P", kind: "openai" as const, baseUrl: "u", defaultModel: "m", isDefault: true };
     const app = { id: "a", name: "A", port: 1, apiKey: "k", providerId: null, enabled: true };
     await api.providers(); await api.saveProvider(provider); await api.providerModels(provider); await api.deleteProvider("p"); await api.setDefaultProvider("p");
@@ -16,5 +16,7 @@ describe("api", () => {
     expect(invoke).toHaveBeenCalledWith("provider_stats", { id: "p" });
     expect(invoke).toHaveBeenCalledWith("set_provider_billing_start_day", { id: "p", day: 15 });
     expect(invoke).toHaveBeenCalledWith("delete_application", { id: "a" });
+    expect(selectApi(false)).toBe(tauriApi);
+    expect(selectApi(true)).not.toBe(tauriApi);
   });
 });

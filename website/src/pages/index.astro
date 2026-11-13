@@ -1,0 +1,72 @@
+---
+import "../styles/marketing.css";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const asset = (path: string) => `${base}/${path.replace(/^\//, "")}`;
+const docs = (path = "") => asset(`docs/${path}`);
+
+const features = [
+  ["01", "Isolated application endpoints", "Give every desktop tool its own loopback port and generated bearer key. Revoke one client without disrupting the others."],
+  ["02", "One provider layer", "Configure cloud and local providers once, choose a default, or pin individual applications to a specific provider."],
+  ["03", "Explicit model access", "Expose only the default model, a selected allowlist, or every model discovered from the effective provider."],
+  ["04", "OpenAI-compatible API", "Connect existing tools to familiar models, chat, responses, embeddings, image, and audio endpoints."],
+  ["05", "Actionable statistics", "Understand request volume, success rate, latency, token consumption, and provider billing periods."],
+  ["06", "Private by default", "Bodies are not stored in SQLite. Optional conversation logging is disabled until you explicitly enable it."],
+];
+
+const tour = [
+  ["Applications", "Give each AI tool an authenticated endpoint", "Create, pause, edit, and revoke application connections independently. Every connection gets a local URL and a cryptographically random key.", "applications.png", "Applications page showing isolated OpenCode, Cursor, and Continue endpoints", "guides/applications/"],
+  ["Providers", "Bring cloud and local models together", "Manage OpenAI, Anthropic, Gemini, Bedrock, Ollama, and compatible services in one place while credentials remain in your operating system keyring.", "providers.png", "Providers page showing OpenAI, Anthropic, and Ollama", "guides/providers/"],
+  ["Usage", "See what every provider is consuming", "Track billing-period and historical input and output tokens, request averages, throughput, and daily or monthly trends.", "openai-statistics.png", "OpenAI provider statistics with token summaries and consumption charts", "guides/statistics/"],
+  ["Logs", "Debug requests without exposing prompts", "Filter operational metadata by application, provider, model, endpoint, status, token usage, and duration—without putting bodies in SQLite.", "request-logs.png", "Request log showing application, model, endpoint, status, tokens, and duration", "guides/request-logs/"],
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content="Agenthub gives desktop AI tools isolated OpenAI-compatible endpoints while keeping provider credentials in one secure local gateway." />
+    <link rel="icon" href={asset("favicon.svg")} />
+    <title>Agenthub — One local gateway for your AI tools</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container nav">
+        <a class="logo" href={asset("")} aria-label="Agenthub home">
+          <span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 7 4v8l-7 4-7-4V7l7-4Z"/><path d="m5 7 7 4 7-4M12 11v8"/></svg></span>
+          agenthub
+        </a>
+        <nav class="nav-links" aria-label="Primary navigation">
+          <a href="#features">Features</a><a href="#tour">Product</a><a href={docs()}>Documentation</a>
+          <a class="button" href="https://github.com/merlos/agenthub">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="container">
+          <span class="eyebrow">Local-first AI infrastructure</span>
+          <h1>One local gateway for <span>all your AI tools</span></h1>
+          <p class="hero-copy">Connect desktop applications to cloud and local models through isolated, OpenAI-compatible endpoints—without scattering provider credentials across every tool.</p>
+          <div class="hero-actions"><a class="button primary" href={docs("getting-started/installation/")}>Install Agenthub →</a><a class="button" href={docs()}>Read the documentation</a></div>
+          <div class="window"><div class="window-bar" aria-hidden="true"><i></i><i></i><i></i></div><img src={asset("screenshots/overview.png")} width="1220" height="790" alt="Agenthub overview with request, token, latency, traffic, and recent request statistics" /></div>
+        </div>
+      </section>
+      <aside class="trust" aria-label="Security highlights"><div class="container trust-row"><span><b class="check">✓</b> Loopback-only endpoints</span><span><b class="check">✓</b> Secrets in the OS keyring</span><span><b class="check">✓</b> No request bodies in SQLite</span><span><b class="check">✓</b> OpenAI-compatible</span></div></aside>
+      <section class="section" id="features">
+        <div class="container"><div class="section-heading"><small>Designed for local workflows</small><h2>Control the path between your tools and models</h2><p>Agenthub centralizes provider access while preserving boundaries between the applications running on your computer.</p></div><div class="features">{features.map(([icon,title,text]) => <article class="feature"><span class="feature-icon">{icon}</span><h3>{title}</h3><p>{text}</p></article>)}</div></div>
+      </section>
+      <section class="section tour" id="tour">
+        <div class="container"><div class="section-heading"><small>Product tour</small><h2>Everything you need to operate a local AI gateway</h2></div>{tour.map(([label,title,text,image,alt,href], index) => <article class="tour-row"><div class="tour-image"><img src={asset(`screenshots/${image}`)} width="1220" height="790" alt={alt} /></div><div class="tour-copy"><span class="number">0{index + 1} · {label}</span><h3>{title}</h3><p>{text}</p><a href={docs(href)}>Learn about {label.toLowerCase()} →</a></div></article>)}</div>
+      </section>
+      <section class="section security">
+        <div class="container security-grid"><div><span class="eyebrow">Local and secure</span><h2>Credentials stay where they belong</h2><p>Agenthub binds application endpoints to loopback, generates an independent 320-bit key for each connection, and stores provider secrets in the operating system keyring—not its database, logs, or frontend state.</p><a class="button" href={docs("concepts/security/")}>Explore the security model →</a></div><div class="security-list"><div class="security-item"><b>Write-only provider secrets</b><span>Keys are never returned to the frontend after storage.</span></div><div class="security-item"><b>Metadata without conversations</b><span>Operational statistics remain useful without retaining prompts and responses.</span></div><div class="security-item"><b>Opt-in conversation logging</b><span>Rotating JSONL logs only exist when explicitly enabled in configuration.</span></div></div></div>
+      </section>
+      <section class="section providers"><div class="container"><div class="section-heading"><small>Provider flexibility</small><h2>Use the models that fit the work</h2><p>Choose native presets or connect any OpenAI-compatible endpoint, including services running entirely on your machine.</p></div><div class="provider-list"><span>OpenAI</span><span>Anthropic</span><span>Google Gemini</span><span>Azure OpenAI</span><span>Amazon Bedrock</span><span>OpenRouter</span><span>DeepSeek</span><span>Ollama</span><span>Compatible APIs</span></div></div></section>
+      <section class="cta"><div class="container"><div class="cta-box"><h2>Put one gateway between every tool and model</h2><p>Build and run Agenthub locally, then connect your first provider and application.</p><a class="button" href={docs("getting-started/installation/")}>Get started →</a></div></div></section>
+    </main>
+    <footer class="footer"><div class="container footer-row"><span>Agenthub · Local AI infrastructure</span><nav aria-label="Footer"><a href={docs()}>Documentation</a><a href="https://github.com/merlos/agenthub">GitHub</a></nav></div></footer>
+  </body>
+</html>

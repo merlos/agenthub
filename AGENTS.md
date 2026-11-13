@@ -17,6 +17,8 @@ provider, translates when needed, and records operational metadata.
   request statistics, including versioned schema migrations.
 - `src-tauri/src/config.rs`: advanced file-based settings.
 - `src-tauri/src/conversation_log.rs`: opt-in rotating JSONL conversation logs.
+- `website/`: Astro marketing site and Starlight Markdown documentation. Keep
+  product claims and limitations aligned with `APP.md`.
 - OS keyring: provider secrets. Secrets must never be stored in SQLite, TOML,
   logs, frontend state, or command responses.
 
@@ -41,6 +43,10 @@ provider, translates when needed, and records operational metadata.
 - Keep loopback binding validation in place; remote exposure is out of scope.
 - Keep UI controls keyboard accessible and preserve visible focus states.
 - Update `APP.md` whenever behavior, support, or limitations change.
+- Keep the browser demo in `src/demoApi.ts` updated whenever UI-visible features,
+  data contracts, or workflows change so marketing captures remain representative.
+- Update the Starlight pages under `website/src/content/docs/docs/` whenever
+  public behavior, installation, support, or limitations change.
 - Add unit tests for every branch of parsing, adaptation, persistence, and
   business logic. CI must enforce 100% coverage on testable project code.
 
@@ -49,6 +55,7 @@ provider, translates when needed, and records operational metadata.
 ```bash
 npm test
 npm run build
+npm run website:build
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings

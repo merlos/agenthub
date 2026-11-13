@@ -5,6 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "demo": "vite --mode demo",
+    "screenshots": "playwright test --config playwright.config.ts",
+    "screenshots:install": "playwright install chromium",
+    "screenshots:gif": "node scripts/create-demo-gif.mjs",
+    "screenshots:all": "npm run screenshots && npm run screenshots:gif",
+    "website:dev": "npm --prefix website run dev",
+    "website:build": "npm --prefix website run build",
     "build": "tsc && vite build",
     "test": "vitest run --coverage",
     "tauri": "tauri"
@@ -17,6 +24,7 @@
     "react-router-dom": "^7.1.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tauri-apps/cli": "^2.9.4",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",

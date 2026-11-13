@@ -6,4 +6,7 @@ src-tauri/gen
 *.db-shm
 *.db-wal
 coverage
+artifacts
+website/dist
+website/.astro
 .DS_Store

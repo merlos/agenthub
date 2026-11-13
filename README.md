@@ -3,6 +3,10 @@
 Agenthub is a Tauri desktop gateway that gives local applications isolated,
 OpenAI-compatible endpoints while keeping provider credentials in one place.
 
+**[Website and documentation](https://merlos.github.io/agenthub/)**
+
+![Agenthub demo showing the overview, applications, providers, statistics, request logs, and settings](docs/assets/agenthub-demo.gif)
+
 ## Development
 
 Requirements: Node.js 20+, Rust stable, and the [Tauri 2 system
@@ -15,6 +19,54 @@ npm run tauri dev
 
 For frontend-only development, run `npm run dev`. Build with `npm run build`
 and run tests with `npm test`.
+
+The Astro marketing site and Starlight documentation live in `website/`. Run
+`npm install --prefix website` once, then use `npm run website:dev` or
+`npm run website:build` from the repository root.
+
+### Marketing demo
+
+Run `npm run demo` to serve a browser-only version populated with realistic fake
+providers, applications, traffic, request logs, and usage statistics. It is
+intended for screenshots and video recordings and supports in-memory UI edits.
+The demo does not invoke Tauri, access the keyring or database, contact provider
+APIs, or start local proxy listeners. All changes disappear when the page is
+reloaded, and every displayed credential is deliberately fake.
+
+Useful capture routes include `/`, `/applications`, `/providers`,
+`/providers/demo-openai/stats`, `/logs`, and `/settings`. Use a `1220×790`
+viewport to match the default desktop window. When adding or changing a
+UI-visible feature, data contract, or workflow, update `src/demoApi.ts` so the
+demo remains representative.
+
+Generate the README screenshots and animated slideshow with Playwright and
+ImageMagick:
+
+```bash
+npm run screenshots:install # first run only
+npm run screenshots:all
+```
+
+The command starts the demo server automatically, writes the individual PNGs
+to `docs/assets/`, and creates `docs/assets/agenthub-demo.gif`. ImageMagick's
+`magick` command must be available to build the GIF.
+
+<details>
+<summary>View full-quality screenshots</summary>
+
+| Overview | Applications |
+| --- | --- |
+| [![Overview](docs/assets/overview.png)](docs/assets/overview.png) | [![Applications](docs/assets/applications.png)](docs/assets/applications.png) |
+
+| Providers | Provider statistics |
+| --- | --- |
+| [![Providers](docs/assets/providers.png)](docs/assets/providers.png) | [![OpenAI statistics](docs/assets/openai-statistics.png)](docs/assets/openai-statistics.png) |
+
+| Request logs | Settings |
+| --- | --- |
+| [![Request logs](docs/assets/request-logs.png)](docs/assets/request-logs.png) | [![Settings](docs/assets/settings.png)](docs/assets/settings.png) |
+
+</details>
 
 ## Connecting a client
 

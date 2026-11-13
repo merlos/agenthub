@@ -5,6 +5,10 @@ isolated loopback port and bearer token and uses Agenthub as an
 OpenAI-compatible API. Agenthub selects a configured provider, adapts the
 request where necessary, and records operational metadata.
 
+For marketing capture, the development-only browser demo supplies fake,
+in-memory data without accessing Tauri, persistent storage, secrets, providers,
+or local proxy listeners. See the development section in `README.md`.
+
 ## Applications
 
 - Create, edit, enable, disable, and delete application endpoints.
