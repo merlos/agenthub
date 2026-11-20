@@ -262,6 +262,9 @@ For signed macOS apps, after mounting/copying the DMG, use
   and rerun the failed jobs for the same tag if its source is unchanged.
 - **Runner/dependency/notarization failure:** inspect the failing job. Retry
   transient failures; source/workflow fixes require a new tag.
+- **Git dubious ownership in the Arch container:** the source job explicitly
+  trusts `$GITHUB_WORKSPACE` for container Git operations before archiving.
+  Keep that step after checkout; do not use a wildcard `safe.directory=*`.
 - **Publication interrupted:** creation starts as a draft, then publishes only
   after the upload completes. Inspect the draft and verify all eight packages
   and checksums before publishing it manually. If uploads are incomplete,
