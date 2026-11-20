@@ -11,6 +11,12 @@ or local proxy listeners. See the development section in `README.md`.
 
 ## Packaging
 
+Pushing a matching `vX.Y.Z` tag triggers GitHub Actions to build Windows MSI,
+macOS DMG, and Debian DEB installers for x64 and ARM64, plus source archives,
+and publish a GitHub Release after all checks succeed. Platform signing and
+GPG-signed checksums are opt-in; see `HOW-TO-RELEASE.md` for credentials,
+release instructions, and limitations.
+
 Arch packaging builds a self-contained source package locally with `makepkg`.
 It includes the PKGBUILD, `.SRCINFO`, and the application source archive; it
 does not compile a binary or publish to AUR. Building the application from this

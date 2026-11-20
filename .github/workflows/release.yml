@@ -1,0 +1,249 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: node scripts/check-release.mjs
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsecret-1-dev
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm ci --prefix website
+      - run: npm run website:build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+  binaries:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-2022
+            triple: x86_64-pc-windows-msvc
+          - target: windows-arm64
+            runner: windows-11-arm
+            triple: aarch64-pc-windows-msvc
+          - target: macos-x64
+            runner: macos-15-intel
+            triple: x86_64-apple-darwin
+          - target: macos-arm64
+            runner: macos-15
+            triple: aarch64-apple-darwin
+          - target: debian-x64
+            runner: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+          - target: debian-arm64
+            runner: ubuntu-22.04-arm
+            triple: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsecret-1-dev
+      - run: npm ci
+      - name: Configure ad-hoc macOS signing
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED != 'true'
+        run: echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+      - name: Configure Windows signing
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          if (!$env:WINDOWS_CERTIFICATE -or !$env:WINDOWS_CERTIFICATE_PASSWORD -or !$env:WINDOWS_TIMESTAMP_URL) {
+            throw "Windows signing requires WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD, and WINDOWS_TIMESTAMP_URL."
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certs = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            $cert = @($certs | Where-Object { $_.HasPrivateKey })
+            if ($cert.Count -ne 1) { throw "The PFX must contain exactly one signing certificate with a private key." }
+            "SIGNING_THUMBPRINT=$($cert[0].Thumbprint)" >> $env:GITHUB_ENV
+            $config = @{ bundle = @{ windows = @{
+              certificateThumbprint = $cert[0].Thumbprint
+              digestAlgorithm = "sha256"
+              timestampUrl = $env:WINDOWS_TIMESTAMP_URL
+              tsp = $true
+            } } } | ConvertTo-Json -Depth 5 -Compress
+            "TAURI_BUILD_CONFIG=$config" >> $env:GITHUB_ENV
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+          }
+      - name: Build package
+        if: runner.os != 'macOS' || vars.MACOS_SIGNING_ENABLED != 'true'
+        run: npm run package -- ${{ matrix.target }}
+      - name: Build signed and notarized macOS package
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required macOS signing secret: $name"
+              exit 1
+            fi
+          done
+          npm run package -- ${{ matrix.target }}
+      - name: Verify Windows installer signature
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts/*.msi | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
+              throw "Installer signature verification failed."
+            }
+          }
+      - name: Verify notarization
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        run: |
+          codesign --verify --deep --strict src-tauri/target/${{ matrix.triple }}/release/bundle/macos/*.app
+          xcrun stapler validate src-tauri/target/${{ matrix.triple }}/release/bundle/macos/*.app
+      - name: Remove Windows signing certificate
+        if: always() && runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          if ($env:SIGNING_THUMBPRINT) {
+            Remove-Item "Cert:\CurrentUser\My\$env:SIGNING_THUMBPRINT" -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: |
+            artifacts/*.msi
+            artifacts/*.dmg
+            artifacts/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  sources:
+    needs: validate
+    runs-on: ubuntu-24.04
+    container: archlinux:base
+    steps:
+      - name: Install source packaging tools
+        run: pacman -Syu --noconfirm --needed base-devel git nodejs npm
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: node scripts/check-release.mjs
+      - run: npm run package:source
+      - name: Build Arch source package as an unprivileged user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- npm run package:aur
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-sources
+          path: |
+            artifacts/agenthub-*-source.tar.gz
+            artifacts/aur/*.src.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [validate, binaries, sources]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: artifacts
+          merge-multiple: true
+      - run: node scripts/prepare-release.mjs
+      - name: Sign checksum manifest
+        if: vars.RELEASE_GPG_SIGNING_ENABLED == 'true'
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+          RELEASE_GPG_FINGERPRINT: ${{ vars.RELEASE_GPG_FINGERPRINT }}
+          GNUPGHOME: ${{ runner.temp }}/release-gnupg
+        run: |
+          if [ -z "$RELEASE_GPG_PRIVATE_KEY" ] || [ -z "$RELEASE_GPG_PASSPHRASE" ] || [ -z "$RELEASE_GPG_FINGERPRINT" ]; then
+            echo "::error::Missing release GPG signing key, passphrase, or fingerprint."
+            exit 1
+          fi
+          mkdir -m 700 "$GNUPGHOME"
+          trap 'gpgconf --kill gpg-agent' EXIT
+          printf '%s' "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import
+          printf '%s' "$RELEASE_GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --local-user "$RELEASE_GPG_FINGERPRINT" --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
+          gpg --armor --export "$RELEASE_GPG_FINGERPRINT" > release/release-signing-key.asc
+          gpg --verify release/SHA256SUMS.asc release/SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED }}
+          WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
+          RELEASE_GPG_SIGNING_ENABLED: ${{ vars.RELEASE_GPG_SIGNING_ENABLED }}
+        run: |
+          printf 'Installers for Windows, macOS, and Debian/Ubuntu; Arch is a source package only (not published to AUR).\n\nmacOS Developer ID signing/notarization: %s\nWindows Authenticode signing: %s\nGPG-signed checksum manifest: %s\n\nSee HOW-TO-RELEASE.md for verification and signing details.\n' \
+            "${MACOS_SIGNING_ENABLED:-false}" "${WINDOWS_SIGNING_ENABLED:-false}" "${RELEASE_GPG_SIGNING_ENABLED:-false}" > "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::error::A release for $RELEASE_TAG already exists. Refusing to replace published assets."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release/* --verify-tag --draft \
+            --title "Agenthub $RELEASE_TAG" --generate-notes --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release edit "$RELEASE_TAG" --draft=false

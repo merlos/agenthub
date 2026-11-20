@@ -1,5 +1,6 @@
 import { cp, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 
@@ -39,17 +40,19 @@ async function findFiles(directory, extension) {
 }
 
 const name = process.argv[2];
-if (!name || !targets[name]) fail(`usage: npm run package -- --target <${Object.keys(targets).join("|")}>`);
+if (!name || !targets[name]) fail(`usage: npm run package -- <${Object.keys(targets).join("|")}>`);
 const target = targets[name];
 if (process.platform !== target.os || process.arch !== target.arch) {
   fail(`${name} must run on ${target.os}/${target.arch}; current host is ${process.platform}/${process.arch}`);
 }
 
 const version = await versions();
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const args = ["run", "tauri", "--", "build", "--bundles", target.bundle, "--target", target.triple];
+// Run the CLI with Node directly: spawning npm.cmd without a shell fails on Windows.
+const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
+const args = [cli, "build", "--ci", "--bundles", target.bundle, "--target", target.triple];
 if (process.env.TAURI_BUILD_CONFIG) args.push("--config", process.env.TAURI_BUILD_CONFIG);
-const result = spawnSync(npmCommand, args, { stdio: "inherit", env: process.env });
+args.push("--", "--locked");
+const result = spawnSync(process.execPath, args, { stdio: "inherit", env: process.env });
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 const bundleRoot = path.join("src-tauri", "target", target.triple, "release", "bundle");

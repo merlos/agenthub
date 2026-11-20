@@ -3,7 +3,32 @@ title: Installation
 description: Build and run Agenthub from source.
 ---
 
-Agenthub is currently installed from source. Packaged release downloads are not yet published.
+Tagged releases automatically build installers for Windows, macOS, and
+Debian/Ubuntu, plus an Arch source package. Check
+[GitHub Releases](https://github.com/merlos/agenthub/releases) for available
+downloads; source builds remain available when no release has been published.
+
+## Release downloads
+
+Choose the installer matching your operating system and CPU:
+
+- Windows: `.msi` for x64 or ARM64
+- macOS: `.dmg` for Intel or Apple Silicon
+- Debian/Ubuntu: `.deb` for amd64 or ARM64, built on Ubuntu 22.04
+- Arch Linux: `.src.tar.gz` to build locally with `makepkg -si`; no AUR publication
+
+Windows installers may download WebView2 if it is not installed. Debian packages
+require WebKitGTK 4.1, GTK 3, libsecret, and D-Bus; install using
+`sudo apt install ./agenthub-<version>-debian-<arch>.deb` to resolve dependencies.
+Mount the macOS DMG and copy Agenthub to Applications.
+
+Each release includes `SHA256SUMS`. Platform signing/notarization and a
+GPG-signed checksum manifest are optional, and release notes state whether they
+were enabled. Unsigned Windows installers may show security warnings or be
+blocked by Smart App Control; ad-hoc-signed macOS apps may require approval in
+Privacy & Security. Review the
+[release guide](https://github.com/merlos/agenthub/blob/main/HOW-TO-RELEASE.md)
+for verification and signing details.
 
 ## Requirements
 
