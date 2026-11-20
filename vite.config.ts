@@ -12,7 +12,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
-      include: ["src/**/*.{ts,tsx}"],
+      include: ["src/**/*.{ts,tsx}", "scripts/render-aur.mjs"],
       exclude: ["src/main.tsx", "src/types.ts", "src/test/**", "src/**/*.test.{ts,tsx}"],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

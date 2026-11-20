@@ -68,6 +68,24 @@ to `docs/assets/`, and creates `docs/assets/agenthub-demo.gif`. ImageMagick's
 
 </details>
 
+## Arch source packaging
+
+On Arch Linux, from the repository root:
+
+```bash
+npm run package:source
+npm run package:aur
+```
+
+This creates `artifacts/aur/agenthub-<version>-1.src.tar.gz`, including the
+PKGBUILD, `.SRCINFO`, and application sources. Nothing is published to AUR,
+and no application binary is compiled. `makepkg` must be installed.
+`package:source` archives committed `HEAD`, not uncommitted changes.
+
+To build and install, extract the source package, enter its `agenthub/`
+directory, and run `makepkg -si`. npm and Cargo dependencies require network
+access.
+
 ## Connecting a client
 
 1. Add a provider, then add an application in agenthub.

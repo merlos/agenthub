@@ -1,0 +1,30 @@
+pkgname=agenthub
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Local OpenAI-compatible gateway for desktop applications"
+arch=('x86_64' 'aarch64')
+url="https://github.com/merlos/agenthub"
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsecret' 'dbus')
+makedepends=('cargo' 'nodejs' 'npm' 'rust')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/releases/download/v${pkgver}/${pkgname}-${pkgver}-source.tar.gz")
+sha256sums=('@SHA256@')
+
+prepare() {
+  cd "${pkgname}-${pkgver}"
+  npm ci --ignore-scripts
+}
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  npm run build
+  cargo build --manifest-path src-tauri/Cargo.toml --release --locked
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  install -Dm755 src-tauri/target/release/agenthub "${pkgdir}/usr/bin/agenthub"
+  install -Dm644 packaging/linux/agenthub.desktop "${pkgdir}/usr/share/applications/agenthub.desktop"
+  install -Dm644 src-tauri/icons/128x128.png "${pkgdir}/usr/share/icons/hicolor/128x128/apps/agenthub.png"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/agenthub/LICENSE"
+}

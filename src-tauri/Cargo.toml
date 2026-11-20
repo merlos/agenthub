@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "A local, OpenAI-compatible gateway for desktop applications"
 authors = ["Agenthub contributors"]
 edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/merlos/agenthub"
 
 [lib]
 name = "agenthub_lib"

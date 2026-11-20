@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Agenthub
+Comment=Local AI gateway for desktop applications
+Exec=agenthub
+Icon=agenthub
+Terminal=false
+Categories=Development;Utility;

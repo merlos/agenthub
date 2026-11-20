@@ -2,6 +2,7 @@
   "name": "agenthub",
   "private": true,
   "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +14,9 @@
     "website:dev": "npm --prefix website run dev",
     "website:build": "npm --prefix website run build",
     "build": "tsc && vite build",
+    "package": "node scripts/package.mjs",
+    "package:source": "node scripts/package-source.mjs",
+    "package:aur": "node scripts/render-aur.mjs",
     "test": "vitest run --coverage",
     "tauri": "tauri"
   },

@@ -9,6 +9,13 @@ For marketing capture, the development-only browser demo supplies fake,
 in-memory data without accessing Tauri, persistent storage, secrets, providers,
 or local proxy listeners. See the development section in `README.md`.
 
+## Packaging
+
+Arch packaging builds a self-contained source package locally with `makepkg`.
+It includes the PKGBUILD, `.SRCINFO`, and the application source archive; it
+does not compile a binary or publish to AUR. Building the application from this
+package still requires network access for npm and Cargo dependencies.
+
 ## Applications
 
 - Create, edit, enable, disable, and delete application endpoints.
