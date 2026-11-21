@@ -197,12 +197,14 @@ jobs:
           useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- npm run package:aur
+      - name: Name Arch release artifact
+        run: |
+          version="${RELEASE_TAG#v}"
+          mv "artifacts/aur/agenthub-${version}-1.src.tar.gz" "artifacts/aur/agenthub-${version}-1-arch.src.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: package-sources
-          path: |
-            artifacts/agenthub-*-source.tar.gz
-            artifacts/aur/*.src.tar.gz
+          path: artifacts/aur/*-arch.src.tar.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -225,7 +227,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - run: node scripts/prepare-release.mjs
-      - name: Sign checksum manifest
+      - name: Sign individual checksum files
         if: vars.RELEASE_GPG_SIGNING_ENABLED == 'true'
         env:
           RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
@@ -240,10 +242,12 @@ jobs:
           mkdir -m 700 "$GNUPGHOME"
           trap 'gpgconf --kill gpg-agent' EXIT
           printf '%s' "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import
-          printf '%s' "$RELEASE_GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
-            --local-user "$RELEASE_GPG_FINGERPRINT" --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
+          for checksum in release/*.sha256; do
+            printf '%s' "$RELEASE_GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              --local-user "$RELEASE_GPG_FINGERPRINT" --armor --detach-sign --output "${checksum}.asc" "$checksum"
+            gpg --verify "${checksum}.asc" "$checksum"
+          done
           gpg --armor --export "$RELEASE_GPG_FINGERPRINT" > release/release-signing-key.asc
-          gpg --verify release/SHA256SUMS.asc release/SHA256SUMS
       - name: Attach artifacts to the existing GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -251,7 +255,7 @@ jobs:
           WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
           RELEASE_GPG_SIGNING_ENABLED: ${{ vars.RELEASE_GPG_SIGNING_ENABLED }}
         run: |
-          printf 'Installers for Windows, macOS, and Debian/Ubuntu; Arch is a source package only (not published to AUR).\n\nmacOS Developer ID signing/notarization: %s\nWindows Authenticode signing: %s\nGPG-signed checksum manifest: %s\n\nSee HOW-TO-RELEASE.md for verification and signing details.\n' \
+          printf 'Installers for Windows, macOS, and Debian/Ubuntu; Arch is a source package only (not published to AUR).\n\nmacOS Developer ID signing/notarization: %s\nWindows Authenticode signing: %s\nGPG-signed individual checksum files: %s\n\nSee HOW-TO-RELEASE.md for verification and signing details.\n' \
             "${MACOS_SIGNING_ENABLED:-false}" "${WINDOWS_SIGNING_ENABLED:-false}" "${RELEASE_GPG_SIGNING_ENABLED:-false}" > release/SIGNING.txt
           if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
             echo "::error::Create a GitHub release for $RELEASE_TAG before uploading artifacts."

@@ -21,18 +21,15 @@ export async function assembleRelease(version, input = "artifacts", output = "re
     `agenthub-${version}-macos-aarch64.dmg`,
     `agenthub-${version}-debian-amd64.deb`,
     `agenthub-${version}-debian-arm64.deb`,
-    `agenthub-${version}-source.tar.gz`,
-    `agenthub-${version}-1.src.tar.gz`,
+    `agenthub-${version}-1-arch.src.tar.gz`,
   ];
   await mkdir(output, { recursive: true });
-  const checksums = [];
   for (const file of files) {
-    const source = path.join(input, file.endsWith(".src.tar.gz") ? "aur" : "", file);
+    const source = path.join(input, file);
     const bytes = await readFile(source);
     if (bytes.length === 0) throw new Error(`Empty release artifact: ${file}`);
     await cp(source, path.join(output, file));
-    checksums.push(`${createHash("sha256").update(bytes).digest("hex")}  ${file}\n`);
+    await writeFile(path.join(output, `${file}.sha256`), `${createHash("sha256").update(bytes).digest("hex")}  ${file}\n`);
   }
-  await writeFile(path.join(output, "SHA256SUMS"), checksums.join(""));
   return files;
 }

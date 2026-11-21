@@ -20,12 +20,14 @@ For `vX.Y.Z`, the release contains:
 | macOS Apple Silicon | `agenthub-X.Y.Z-macos-aarch64.dmg` |
 | Debian/Ubuntu amd64 | `agenthub-X.Y.Z-debian-amd64.deb` |
 | Debian/Ubuntu ARM64 | `agenthub-X.Y.Z-debian-arm64.deb` |
-| Application sources | `agenthub-X.Y.Z-source.tar.gz` |
-| Arch source package | `agenthub-X.Y.Z-1.src.tar.gz` |
+| Arch source package | `agenthub-X.Y.Z-1-arch.src.tar.gz` |
 
-`SHA256SUMS` covers all eight packages. `SIGNING.txt` records their signing modes.
-Optional GPG signing adds `SHA256SUMS.asc`
-and `release-signing-key.asc`. Arch remains **source-only**, not an Arch binary
+Each of the seven packages has a matching `<filename>.sha256` checksum file.
+`SIGNING.txt` records their signing modes. Optional GPG signing adds
+`<filename>.sha256.asc` for each package and `release-signing-key.asc`.
+The standalone whole-repository source archive is only an Arch packaging input
+and is not uploaded. GitHub's automatic source downloads are unaffected.
+Arch remains **source-only**, not an Arch binary
 package and not published to AUR. The `1` is Arch's packaging revision (`pkgrel`).
 The Debian binaries are built on Ubuntu 22.04, and require the WebKitGTK 4.1,
 GTK 3, libsecret, and D-Bus packages declared in their package dependencies.
@@ -151,8 +153,8 @@ for cloud/hardware alternatives.
 
 ## Optional GPG signature for all release assets
 
-This signs the checksum manifest, covering Windows/macOS installers, Debian
-packages, and both source archives. It does not embed a Debian package signature
+This signs each package's checksum file, covering Windows/macOS installers, Debian
+packages, and the Arch source package. It does not embed a Debian package signature
 or replace platform code signing. No apt repository or automatic updater is
 configured.
 
@@ -175,7 +177,7 @@ configured.
 4. Publish the fingerprint/public key through an independently trusted channel.
    A key downloaded beside an artifact alone does not establish trust.
 
-The workflow uses a temporary GPG home, signs `SHA256SUMS`, verifies the
+The workflow uses a temporary GPG home, signs each `.sha256` file, verifies each
 signature, and exports the public key. Windows/macOS signing is independent.
 Tauri updater signing secrets are not needed because Agenthub has no updater.
 
@@ -230,7 +232,7 @@ Tauri updater signing secrets are not needed because Agenthub has no updater.
     for that tag. Publishing releases using `GITHUB_TOKEN` also does not trigger
     another workflow; use a human action or suitable GitHub App/token.
 6. Watch **Actions → Release**. It validates versions and runs the checks again,
-   builds native x64/ARM64 packages, and assembles all eight assets before
+   builds native x64/ARM64 packages, and assembles all seven packages before
     upload. Arch source packaging runs as a non-root user.
 7. Open **Releases**, review your notes and the attached `SIGNING.txt`,
    download the matching installers, verify checksums/signatures, and
@@ -261,14 +263,16 @@ source to repair a release.
 
 ## Verify downloads
 
-Download all eight assets and `SHA256SUMS` into the same directory:
+Download the desired package and its matching `.sha256` file into the same
+directory. For example:
 
 ```bash
-sha256sum --check SHA256SUMS
+sha256sum --check agenthub-X.Y.Z-1-arch.src.tar.gz.sha256
 ```
 
-On macOS use `shasum -a 256 -c SHA256SUMS`; for one Windows artifact use
-`Get-FileHash -Algorithm SHA256 file.msi` and compare with its manifest entry.
+To check all downloaded packages, use `sha256sum --check *.sha256`.
+On macOS use `shasum -a 256 -c <filename>.sha256`; for one Windows artifact use
+`Get-FileHash -Algorithm SHA256 file.msi` and compare with its `.sha256` file.
 Checksums detect corruption; unsigned checksums do not authenticate a publisher.
 
 If GPG signing is enabled, first compare the key fingerprint with the trusted
@@ -277,8 +281,8 @@ published fingerprint, then:
 ```bash
 gpg --show-keys --with-fingerprint release-signing-key.asc
 gpg --import release-signing-key.asc
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum --check SHA256SUMS
+gpg --verify agenthub-X.Y.Z-1-arch.src.tar.gz.sha256.asc agenthub-X.Y.Z-1-arch.src.tar.gz.sha256
+sha256sum --check agenthub-X.Y.Z-1-arch.src.tar.gz.sha256
 ```
 
 For signed Windows installers, check `Get-AuthenticodeSignature file.msi`.
@@ -299,7 +303,7 @@ For signed macOS apps, after mounting/copying the DMG, use
   Keep that step after checkout; do not use a wildcard `safe.directory=*`.
 - **Upload interrupted:** some files may already be attached. Rerun the upload
   job or manually dispatch the workflow for the same tag; same-name files are
-  replaced. Verify all eight packages against the final `SHA256SUMS`.
+   replaced. Verify all seven packages against their final `.sha256` files.
 - **Release missing:** create it manually for the exact tag, then retry. The
   workflow never creates it for you.
 - **Workflow fix for an existing tag:** merge the fix onto the default branch

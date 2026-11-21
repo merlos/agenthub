@@ -30,22 +30,28 @@ describe("release assembly", () => {
   it("requires every package and generates checksums for the exact published bytes", async () => {
     readFile.mockResolvedValue(Buffer.from("package"));
     const files = await assembleRelease("1.2.3");
-    expect(files).toHaveLength(8);
+    expect(files).toHaveLength(7);
     expect(files).toContain("agenthub-1.2.3-windows-aarch64.msi");
     expect(files).toContain("agenthub-1.2.3-macos-x86_64.dmg");
     expect(files).toContain("agenthub-1.2.3-debian-amd64.deb");
     expect(mkdir).toHaveBeenCalledWith("release", { recursive: true });
-    expect(readFile).toHaveBeenCalledWith("artifacts/aur/agenthub-1.2.3-1.src.tar.gz");
+    expect(files).toContain("agenthub-1.2.3-1-arch.src.tar.gz");
+    expect(files).not.toContain("agenthub-1.2.3-source.tar.gz");
+    expect(readFile).toHaveBeenCalledWith("artifacts/agenthub-1.2.3-1-arch.src.tar.gz");
+    expect(readFile).toHaveBeenCalledTimes(7);
     for (const file of files) expect(cp).toHaveBeenCalledWith(expect.any(String), `release/${file}`);
     const checksum = createHash("sha256").update("package").digest("hex");
-    expect(writeFile).toHaveBeenCalledWith("release/SHA256SUMS", files.map((file) => `${checksum}  ${file}\n`).join(""));
+    expect(writeFile).toHaveBeenCalledTimes(7);
+    for (const file of files) {
+      expect(writeFile).toHaveBeenCalledWith(`release/${file}.sha256`, `${checksum}  ${file}\n`);
+    }
   });
 
   it("supports alternate directories", async () => {
     readFile.mockResolvedValue(Buffer.from("package"));
     await assembleRelease("1.2.3", "input", "output");
-    expect(cp).toHaveBeenCalledWith("input/aur/agenthub-1.2.3-1.src.tar.gz", "output/agenthub-1.2.3-1.src.tar.gz");
-    expect(writeFile).toHaveBeenCalledWith("output/SHA256SUMS", expect.any(String));
+    expect(cp).toHaveBeenCalledWith("input/agenthub-1.2.3-1-arch.src.tar.gz", "output/agenthub-1.2.3-1-arch.src.tar.gz");
+    expect(writeFile).toHaveBeenCalledWith("output/agenthub-1.2.3-1-arch.src.tar.gz.sha256", expect.any(String));
   });
 
   it("rejects an empty package", async () => {

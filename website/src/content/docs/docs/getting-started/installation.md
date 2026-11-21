@@ -16,15 +16,16 @@ Choose the installer matching your operating system and CPU:
 - Windows: `.msi` for x64 or ARM64
 - macOS: `.dmg` for Intel or Apple Silicon
 - Debian/Ubuntu: `.deb` for amd64 or ARM64, built on Ubuntu 22.04
-- Arch Linux: `.src.tar.gz` to build locally with `makepkg -si`; no AUR publication
+- Arch Linux: `agenthub-<version>-1-arch.src.tar.gz` to build locally with `makepkg -si`; no AUR publication
 
 Windows installers may download WebView2 if it is not installed. Debian packages
 require WebKitGTK 4.1, GTK 3, libsecret, and D-Bus; install using
 `sudo apt install ./agenthub-<version>-debian-<arch>.deb` to resolve dependencies.
 Mount the macOS DMG and copy Agenthub to Applications.
 
-Each release includes `SHA256SUMS`. Platform signing/notarization and a
-GPG-signed checksum manifest are optional, and the attached `SIGNING.txt` states
+Each package includes a matching `<filename>.sha256` file. Verify it with
+`sha256sum --check <filename>.sha256`. Platform signing/notarization and
+GPG signatures for individual checksum files are optional, and the attached `SIGNING.txt` states
 whether they were enabled. Unsigned Windows installers may show security warnings or be
 blocked by Smart App Control; ad-hoc-signed macOS apps may require approval in
 Privacy & Security. Review the
@@ -68,7 +69,8 @@ npm run package:source
 npm run package:aur
 ```
 
-The output is `artifacts/aur/agenthub-<version>-1.src.tar.gz`. It contains the
+The local output is `artifacts/aur/agenthub-<version>-1.src.tar.gz`; the release
+pipeline renames it to `agenthub-<version>-1-arch.src.tar.gz`. It contains the
 PKGBUILD, `.SRCINFO`, and application sources, without compiling a binary or
 requiring a published GitHub release. The source archive is created from
 committed `HEAD`, so commit packaging changes before generating it.

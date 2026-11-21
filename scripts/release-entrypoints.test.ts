@@ -46,8 +46,9 @@ describe("release entrypoints", () => {
 
   it("assembles the versioned downloaded packages", async () => {
     await import("./prepare-release.mjs");
-    expect(cp).toHaveBeenCalledTimes(8);
+    expect(cp).toHaveBeenCalledTimes(7);
     expect(cp).toHaveBeenCalledWith("artifacts/agenthub-1.2.3-windows-aarch64.msi", "release/agenthub-1.2.3-windows-aarch64.msi");
-    expect(writeFile).toHaveBeenCalledWith("release/SHA256SUMS", expect.any(String));
+    expect(writeFile).toHaveBeenCalledTimes(7);
+    expect(writeFile).toHaveBeenCalledWith("release/agenthub-1.2.3-windows-aarch64.msi.sha256", expect.any(String));
   });
 });

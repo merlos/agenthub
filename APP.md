@@ -13,12 +13,14 @@ or local proxy listeners. See the development section in `README.md`.
 
 Publishing a manually created GitHub Release for a matching `vX.Y.Z` tag
 triggers GitHub Actions to build Windows MSI,
-macOS DMG, and Debian DEB installers for x64 and ARM64, plus source archives,
+macOS DMG, and Debian DEB installers for x64 and ARM64, plus an Arch source package,
 and attach them to that existing release after all checks succeed. The workflow
 does not create releases or change their metadata; a manual trigger supports
 existing releases and retries. Platform signing and
 GPG-signed checksums are opt-in; see `HOW-TO-RELEASE.md` for credentials,
-release instructions, and limitations.
+release instructions, and limitations. Each package has its own `.sha256` file.
+The Arch release asset is `agenthub-X.Y.Z-1-arch.src.tar.gz`; the standalone
+whole-repository source archive is not uploaded.
 
 Arch packaging builds a self-contained source package locally with `makepkg`.
 It includes the PKGBUILD, `.SRCINFO`, and the application source archive; it
