@@ -3,8 +3,9 @@ title: Installation
 description: Build and run Agenthub from source.
 ---
 
-Tagged releases automatically build installers for Windows, macOS, and
-Debian/Ubuntu, plus an Arch source package. Check
+Publishing a manually created GitHub Release automatically builds and attaches
+installers for Windows, macOS, and Debian/Ubuntu, plus an Arch source package.
+The workflow does not create releases or change their notes or status. Check
 [GitHub Releases](https://github.com/merlos/agenthub/releases) for available
 downloads; source builds remain available when no release has been published.
 
@@ -23,8 +24,8 @@ require WebKitGTK 4.1, GTK 3, libsecret, and D-Bus; install using
 Mount the macOS DMG and copy Agenthub to Applications.
 
 Each release includes `SHA256SUMS`. Platform signing/notarization and a
-GPG-signed checksum manifest are optional, and release notes state whether they
-were enabled. Unsigned Windows installers may show security warnings or be
+GPG-signed checksum manifest are optional, and the attached `SIGNING.txt` states
+whether they were enabled. Unsigned Windows installers may show security warnings or be
 blocked by Smart App Control; ad-hoc-signed macOS apps may require approval in
 Privacy & Security. Review the
 [release guide](https://github.com/merlos/agenthub/blob/main/HOW-TO-RELEASE.md)

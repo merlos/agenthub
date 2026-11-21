@@ -1,10 +1,12 @@
 # How to release Agenthub
 
-Pushing a new tag such as `v0.1.0` starts
+Publishing a GitHub Release for a tag such as `v0.1.0` starts
 [`.github/workflows/release.yml`](.github/workflows/release.yml). After validation
-and every package build succeeds, it creates a GitHub Release, attaches the
-artifacts, and publishes it automatically. No AUR account or AUR SSH key is
-required.
+and every package build succeeds, it attaches artifacts to that existing
+release. You create the release and tag manually; the workflow never creates
+or publishes a release or changes its title, notes, or draft/prerelease status.
+Pushing a tag alone does not start packaging. No AUR account or AUR SSH key
+is required.
 
 ## Artifacts
 
@@ -21,7 +23,8 @@ For `vX.Y.Z`, the release contains:
 | Application sources | `agenthub-X.Y.Z-source.tar.gz` |
 | Arch source package | `agenthub-X.Y.Z-1.src.tar.gz` |
 
-`SHA256SUMS` covers all eight files. Optional GPG signing adds `SHA256SUMS.asc`
+`SHA256SUMS` covers all eight packages. `SIGNING.txt` records their signing modes.
+Optional GPG signing adds `SHA256SUMS.asc`
 and `release-signing-key.asc`. Arch remains **source-only**, not an Arch binary
 package and not published to AUR. The `1` is Arch's packaging revision (`pkgrel`).
 The Debian binaries are built on Ubuntu 22.04, and require the WebKitGTK 4.1,
@@ -45,6 +48,8 @@ This does not guarantee compatibility with every Debian-derived distribution.
    signing is enabled, so release tags must point to reviewed, trusted commits.
 5. Configure signing as described below, or leave it disabled for initial
    unsigned releases.
+6. Keep release immutability disabled for this upload-after-publication flow:
+   the workflow must be able to add assets and replace same-name assets on retries.
 
 Add secrets under **Settings → Secrets and variables → Actions → Secrets →
 New repository secret**. Add variables on the adjacent **Variables** tab.
@@ -95,7 +100,8 @@ The initial notarization can take a long time; do not bypass failures or use
 
 Without this variable, macOS bundles receive an **ad-hoc** signature (`-`).
 This is not Developer ID signing/notarization, and users may need to approve
-the application in Privacy & Security. Release notes disclose the signing mode.
+the application in Privacy & Security. The attached `SIGNING.txt` discloses
+the signing mode; mention it in your manually written release notes as well.
 
 See [Tauri's macOS signing guide](https://v2.tauri.app/distribute/sign/macos/).
 
@@ -205,7 +211,12 @@ Tauri updater signing secrets are not needed because Agenthub has no updater.
    syntax; on PowerShell set `$env:RELEASE_TAG = "v0.1.0"` before running Node.
 4. Commit and push all changes, and wait for Quality CI to pass. Ensure the
    release workflow exists **in the tagged commit**.
-5. Create and push a new tag using your developer credentials:
+5. In GitHub, open **Releases → Draft a new release**. Choose a new `vX.Y.Z` tag,
+   select the reviewed commit, enter the title and release notes, then click
+   **Publish release**. GitHub can create the tag together with the release.
+   This starts the artifact workflow.
+
+   Alternatively, create and push the tag locally first:
 
    ```bash
    git tag -a v0.1.0 -m "Agenthub v0.1.0"
@@ -214,18 +225,39 @@ Tauri updater signing secrets are not needed because Agenthub has no updater.
 
    Prefer a GPG-signed Git tag (`git tag -s`) if configured. Tags must be exactly
    `vX.Y.Z`, without leading zeros, prerelease suffixes, or build metadata.
-   Tags pushed using another workflow's `GITHUB_TOKEN` do not trigger this
-   workflow; use a human push or a suitable GitHub App/token for automation.
+    Tags pushed using another workflow's `GITHUB_TOKEN` do not trigger this
+    workflow by themselves. After pushing, manually publish a GitHub Release
+    for that tag. Publishing releases using `GITHUB_TOKEN` also does not trigger
+    another workflow; use a human action or suitable GitHub App/token.
 6. Watch **Actions → Release**. It validates versions and runs the checks again,
    builds native x64/ARM64 packages, and assembles all eight assets before
-   publication. Arch source packaging runs as a non-root user.
-7. Open **Releases**, review the generated notes and signing-mode statements,
+    upload. Arch source packaging runs as a non-root user.
+7. Open **Releases**, review your notes and the attached `SIGNING.txt`,
    download the matching installers, verify checksums/signatures, and
    smoke-test installation, launch, and gateway requests on each platform.
 
-No release is published when a check or build fails. Successful individual
-builds are available as Actions artifacts for 14 days. The final GitHub Release
-assets are separate from these temporary artifacts.
+If a check or build fails, no artifacts are uploaded; your existing release
+remains unchanged. Successful individual builds are available as Actions
+artifacts for 14 days. The GitHub Release assets are separate from these
+temporary artifacts.
+
+### Existing releases and manual retries
+
+For an already-created release, open **Actions → Release → Run workflow**,
+choose the branch with the updated workflow (normally `main`), and enter its
+existing tag in the `tag` field. The workflow checks out and builds that tag,
+not the selected branch. The manual trigger must exist on the default branch.
+
+You can also run it from GitHub CLI:
+
+```bash
+gh workflow run release.yml --ref main -f tag=v0.1.0
+```
+
+The target release must already exist. Uploads use `--clobber`, so retries
+replace only assets with the same filenames; unrelated assets and manually
+written release metadata remain untouched. Do not change a published tag's
+source to repair a release.
 
 ## Verify downloads
 
@@ -265,9 +297,13 @@ For signed macOS apps, after mounting/copying the DMG, use
 - **Git dubious ownership in the Arch container:** the source job explicitly
   trusts `$GITHUB_WORKSPACE` for container Git operations before archiving.
   Keep that step after checkout; do not use a wildcard `safe.directory=*`.
-- **Publication interrupted:** creation starts as a draft, then publishes only
-  after the upload completes. Inspect the draft and verify all eight packages
-  and checksums before publishing it manually. If uploads are incomplete,
-  delete only that unpublished draft and rerun publication.
-- **Release already exists:** the workflow refuses to overwrite its assets.
-  For an already published release, preserve it and ship a new version.
+- **Upload interrupted:** some files may already be attached. Rerun the upload
+  job or manually dispatch the workflow for the same tag; same-name files are
+  replaced. Verify all eight packages against the final `SHA256SUMS`.
+- **Release missing:** create it manually for the exact tag, then retry. The
+  workflow never creates it for you.
+- **Workflow fix for an existing tag:** merge the fix onto the default branch
+  and use the manual trigger above. An old run's rerun uses its old workflow.
+- **Immutable release:** asset uploads/replacements are blocked by GitHub.
+  This workflow requires mutable releases; do not delete a published release
+  just to retry an upload.

@@ -11,9 +11,12 @@ or local proxy listeners. See the development section in `README.md`.
 
 ## Packaging
 
-Pushing a matching `vX.Y.Z` tag triggers GitHub Actions to build Windows MSI,
+Publishing a manually created GitHub Release for a matching `vX.Y.Z` tag
+triggers GitHub Actions to build Windows MSI,
 macOS DMG, and Debian DEB installers for x64 and ARM64, plus source archives,
-and publish a GitHub Release after all checks succeed. Platform signing and
+and attach them to that existing release after all checks succeed. The workflow
+does not create releases or change their metadata; a manual trigger supports
+existing releases and retries. Platform signing and
 GPG-signed checksums are opt-in; see `HOW-TO-RELEASE.md` for credentials,
 release instructions, and limitations.
 

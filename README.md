@@ -70,8 +70,9 @@ to `docs/assets/`, and creates `docs/assets/agenthub-demo.gif`. ImageMagick's
 
 ## Releases
 
-Pushing a `vX.Y.Z` tag builds Windows MSI, macOS DMG, and Debian DEB installers
-for x64 and ARM64, plus the Arch source package, and publishes a GitHub Release.
+Publishing a manually created GitHub Release for a `vX.Y.Z` tag builds Windows
+MSI, macOS DMG, and Debian DEB installers for x64 and ARM64, plus the Arch source
+package, and attaches them to that release without changing its metadata.
 See [HOW-TO-RELEASE.md](HOW-TO-RELEASE.md) for versioning, signing secrets,
 verification, and recovery instructions.
 

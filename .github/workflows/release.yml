@@ -1,18 +1,24 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   validate:
@@ -20,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -70,6 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -177,6 +185,7 @@ jobs:
         run: pacman -Syu --noconfirm --needed base-devel git nodejs npm
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - name: Trust the checked-out workspace inside the container
         # Checkout's temporary Git configuration may not persist into shell steps.
@@ -205,6 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -234,7 +244,7 @@ jobs:
             --local-user "$RELEASE_GPG_FINGERPRINT" --armor --detach-sign --output release/SHA256SUMS.asc release/SHA256SUMS
           gpg --armor --export "$RELEASE_GPG_FINGERPRINT" > release/release-signing-key.asc
           gpg --verify release/SHA256SUMS.asc release/SHA256SUMS
-      - name: Publish GitHub release
+      - name: Attach artifacts to the existing GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED }}
@@ -242,11 +252,9 @@ jobs:
           RELEASE_GPG_SIGNING_ENABLED: ${{ vars.RELEASE_GPG_SIGNING_ENABLED }}
         run: |
           printf 'Installers for Windows, macOS, and Debian/Ubuntu; Arch is a source package only (not published to AUR).\n\nmacOS Developer ID signing/notarization: %s\nWindows Authenticode signing: %s\nGPG-signed checksum manifest: %s\n\nSee HOW-TO-RELEASE.md for verification and signing details.\n' \
-            "${MACOS_SIGNING_ENABLED:-false}" "${WINDOWS_SIGNING_ENABLED:-false}" "${RELEASE_GPG_SIGNING_ENABLED:-false}" > "$RUNNER_TEMP/release-notes.md"
-          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            echo "::error::A release for $RELEASE_TAG already exists. Refusing to replace published assets."
+            "${MACOS_SIGNING_ENABLED:-false}" "${WINDOWS_SIGNING_ENABLED:-false}" "${RELEASE_GPG_SIGNING_ENABLED:-false}" > release/SIGNING.txt
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::error::Create a GitHub release for $RELEASE_TAG before uploading artifacts."
             exit 1
           fi
-          gh release create "$RELEASE_TAG" release/* --verify-tag --draft \
-            --title "Agenthub $RELEASE_TAG" --generate-notes --notes-file "$RUNNER_TEMP/release-notes.md"
-          gh release edit "$RELEASE_TAG" --draft=false
+          gh release upload "$RELEASE_TAG" release/* --clobber
