@@ -111,6 +111,9 @@ notarization using the **App Store Connect API**, waits for Apple's result,
 and staples the ticket. This authenticates notarization; it does **not**
 publish the app to the Mac App Store. The workflow verifies the app signature
 and stapled ticket before uploading the DMG.
+Packaging explicitly requests both `app` and `dmg` bundles so Tauri retains
+the `.app` for verification; requesting only `dmg` removes the intermediate
+`.app` after creating the disk image.
 The initial notarization can take a long time; do not bypass failures or use
 `--skip-stapling` for a public signed release.
 

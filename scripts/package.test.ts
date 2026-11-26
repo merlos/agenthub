@@ -54,7 +54,7 @@ describe("binary packaging", () => {
     readdir.mockResolvedValue([file(`agenthub.${bundle}`)]);
     await run();
     expect(spawnSync).toHaveBeenCalledWith(process.execPath, [
-      "/cli/tauri.js", "build", "--ci", "--bundles", bundle, "--target", triple, "--", "--locked",
+      "/cli/tauri.js", "build", "--ci", "--bundles", platform === "darwin" ? "app,dmg" : bundle, "--target", triple, "--", "--locked",
     ], { stdio: "inherit", env: process.env });
     expect(cp).toHaveBeenCalledWith(path.join("src-tauri", "target", triple, "release", "bundle", `agenthub.${bundle}`), `artifacts/agenthub-1.2.3-${suffix}.${bundle}`);
     expect(rm).toHaveBeenCalledWith(`artifacts/agenthub-1.2.3-${suffix}.${bundle}`, { force: true });

@@ -7,8 +7,8 @@ import process from "node:process";
 const targets = {
   "windows-x64": { os: "win32", arch: "x64", triple: "x86_64-pc-windows-msvc", bundle: "msi", extension: ".msi", outputArch: "x86_64" },
   "windows-arm64": { os: "win32", arch: "arm64", triple: "aarch64-pc-windows-msvc", bundle: "msi", extension: ".msi", outputArch: "aarch64" },
-  "macos-x64": { os: "darwin", arch: "x64", triple: "x86_64-apple-darwin", bundle: "dmg", extension: ".dmg", outputArch: "x86_64" },
-  "macos-arm64": { os: "darwin", arch: "arm64", triple: "aarch64-apple-darwin", bundle: "dmg", extension: ".dmg", outputArch: "aarch64" },
+  "macos-x64": { os: "darwin", arch: "x64", triple: "x86_64-apple-darwin", bundle: "app,dmg", extension: ".dmg", outputArch: "x86_64" },
+  "macos-arm64": { os: "darwin", arch: "arm64", triple: "aarch64-apple-darwin", bundle: "app,dmg", extension: ".dmg", outputArch: "aarch64" },
   "debian-x64": { os: "linux", arch: "x64", triple: "x86_64-unknown-linux-gnu", bundle: "deb", extension: ".deb", outputArch: "amd64" },
   "debian-arm64": { os: "linux", arch: "arm64", triple: "aarch64-unknown-linux-gnu", bundle: "deb", extension: ".deb", outputArch: "arm64" },
 };
@@ -49,6 +49,7 @@ if (process.platform !== target.os || process.arch !== target.arch) {
 const version = await versions();
 // Run the CLI with Node directly: spawning npm.cmd without a shell fails on Windows.
 const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
+// Explicitly request app as well as dmg so Tauri retains it for release signature/ticket verification.
 const args = [cli, "build", "--ci", "--bundles", target.bundle, "--target", target.triple];
 if (process.env.TAURI_BUILD_CONFIG) args.push("--config", process.env.TAURI_BUILD_CONFIG);
 args.push("--", "--locked");
