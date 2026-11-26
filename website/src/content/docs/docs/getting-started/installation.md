@@ -31,6 +31,9 @@ blocked by Smart App Control; ad-hoc-signed macOS apps may require approval in
 Privacy & Security. Review the
 [release guide](https://github.com/merlos/agenthub/blob/main/HOW-TO-RELEASE.md)
 for verification and signing details.
+When enabled, macOS signing uses a Developer ID Application certificate and
+notarization uses the App Store Connect team API; releases are distributed
+as DMGs, not published to the Mac App Store.
 
 ## Requirements
 

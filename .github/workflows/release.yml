@@ -129,20 +129,39 @@ jobs:
         run: npm run package -- ${{ matrix.target }}
       - name: Build signed and notarized macOS package
         if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_PRIVATE_KEY APPLE_TEAM_ID; do
             if [ -z "${!name}" ]; then
-              echo "::error::Missing required macOS signing secret: $name"
+              echo "::error::Missing required macOS signing credential: $name (check the step's repository secret mapping)"
               exit 1
             fi
           done
+          umask 077
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/apple-signing.XXXXXX")"
+          trap 'rm -rf "$signing_dir"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$signing_dir/certificate.p12"
+          export APPLE_API_KEY_PATH="$signing_dir/AuthKey.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$APPLE_API_KEY_PATH"
+          openssl pkey -in "$APPLE_API_KEY_PATH" -noout
+          APPLE_SIGNING_IDENTITY="$(
+            openssl pkcs12 -in "$signing_dir/certificate.p12" -clcerts -nokeys -passin env:APPLE_CERTIFICATE_PASSWORD |
+              openssl x509 -noout -subject -nameopt multiline |
+              sed -n 's/^ *commonName *= *//p'
+          )"
+          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "*" ($APPLE_TEAM_ID)" ]]; then
+            echo "::error::The certificate must be a Developer ID Application certificate for APPLE_TEAM_ID."
+            exit 1
+          fi
+          export APPLE_SIGNING_IDENTITY
+          unset APPLE_API_PRIVATE_KEY
           npm run package -- ${{ matrix.target }}
       - name: Verify Windows installer signature
         if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'

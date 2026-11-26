@@ -19,6 +19,8 @@ does not create releases or change their metadata; a manual trigger supports
 existing releases and retries. Platform signing and
 GPG-signed checksums are opt-in; see `HOW-TO-RELEASE.md` for credentials,
 release instructions, and limitations. Each package has its own `.sha256` file.
+Opt-in macOS releases use Developer ID Application signing and App Store Connect
+team API credentials for notarization, not Apple ID/app-specific passwords.
 The Arch release asset is `agenthub-X.Y.Z-1-arch.src.tar.gz`; the standalone
 whole-repository source archive is not uploaded.
 
