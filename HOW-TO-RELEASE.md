@@ -78,25 +78,39 @@ certificate (not an Apple Distribution or Developer ID Installer certificate).
    openssl base64 -A -in certificate.p12 -out certificate-base64.txt
    ```
 
-4. Create these repository secrets:
+4. In [App Store Connect → Users and Access](https://appstoreconnect.apple.com/access/users),
+   open **Integrations → App Store Connect API** and create a **team API key**
+   with **Developer** access. Download its private `.p8` key (available only
+   once), and record its Key ID and Issuer ID. Accept any pending Apple
+   Developer agreements first.
+5. Create these repository secrets:
 
    | Secret | Value |
    | --- | --- |
-   | `APPLE_CERTIFICATE` | Contents of `certificate-base64.txt` |
+   | `APPLE_CERTIFICATE_BASE64` | Contents of `certificate-base64.txt` |
    | `APPLE_CERTIFICATE_PASSWORD` | `.p12` export password |
-   | `APPLE_SIGNING_IDENTITY` | Full identity, e.g. `Developer ID Application: Example Name (TEAMID)` |
-   | `APPLE_ID` | Apple account email used for notarization |
-   | `APPLE_PASSWORD` | Apple **app-specific password**, not your normal account password |
+   | `APPLE_API_ISSUER` | App Store Connect team API Issuer ID |
+   | `APPLE_API_KEY_ID` | App Store Connect API Key ID |
+   | `APPLE_API_KEY` | Complete private `.p8` file contents, including PEM headers and line breaks; **not** base64 and **not** the Key ID |
    | `APPLE_TEAM_ID` | Apple Developer team ID |
 
-   Obtain the identity with `security find-identity -v -p codesigning`. Create
-   the app-specific password at [account.apple.com](https://account.apple.com/).
-   Accept any pending Apple Developer agreements first.
-5. Set repository variable `MACOS_SIGNING_ENABLED` to `true`.
+6. Set repository variable `MACOS_SIGNING_ENABLED` to `true` (on the
+   **Variables** tab, not as a secret). Creating the six secrets alone does
+   not enable signing.
+
+The workflow maps `APPLE_CERTIFICATE_BASE64` to Tauri's `APPLE_CERTIFICATE`,
+and `APPLE_API_KEY_ID` to Tauri's `APPLE_API_KEY`. It writes the private key
+secret to a restricted temporary file and passes its path as
+`APPLE_API_KEY_PATH`, then removes the temporary files even if the build fails.
+It derives `APPLE_SIGNING_IDENTITY` from the exported certificate and checks
+that it is a Developer ID Application certificate for `APPLE_TEAM_ID`.
+No `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, or `APPLE_PASSWORD` secret is required.
 
 Tauri imports the certificate into the ephemeral runner, signs, submits for
-notarization, waits for Apple's result, and staples the ticket. The workflow
-verifies the app signature and stapled ticket before uploading the DMG.
+notarization using the **App Store Connect API**, waits for Apple's result,
+and staples the ticket. This authenticates notarization; it does **not**
+publish the app to the Mac App Store. The workflow verifies the app signature
+and stapled ticket before uploading the DMG.
 The initial notarization can take a long time; do not bypass failures or use
 `--skip-stapling` for a public signed release.
 
